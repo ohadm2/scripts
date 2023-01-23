@@ -184,6 +184,9 @@ done
 # "$?" = reffers to the last error code [make sure you use it RIGHT AFTER the cmd to test]
 # The SPACES are a MUST since the signs [ and ] are files!
 
+# double negate example
+if [ "$?" != 0 -a "$1" != "" ]; then
+
 if ! [ -s /etc/init.d/httpd ]; then
 else
 fi
