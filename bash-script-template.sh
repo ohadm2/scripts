@@ -225,10 +225,18 @@ done
 # Using sed:
 
 # sed -i = overwite the file with the changes (without -i sed will only print the change)
-
 #/g = "greedy" - replace again and again if found more than once
 
-# sed -i "s/findThisText/replaceItWithThisText/g" file_to_update
+sed -i "s/findThisText/replaceItWithThisText/g" file_to_update
+sed -i "s#findThisText#replaceItWithThisText#g" file_to_update
+
+# append after a line:
+# the following will append $DATA after line 2 of file 1.txt:
+sed "2 a $DATA" 1.txt
+
+
+
+
 
 # sed -i "s/\<.*\>/\<new_stuff\>/g" file_to_update
 				     
