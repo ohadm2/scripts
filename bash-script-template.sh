@@ -184,8 +184,10 @@ done
 # "$?" = reffers to the last error code [make sure you use it RIGHT AFTER the cmd to test]
 # The SPACES are a MUST since the signs [ and ] are files!
 
-# double negate example
+# double negate examples
 if [ "$?" != 0 -a "$1" != "" ]; then
+
+if [ ! -s ~/temp/1.txt -o ! -s ~/temp/2.txt ]; then echo missing; fi
 
 if ! [ -s /etc/init.d/httpd ]; then
 else
