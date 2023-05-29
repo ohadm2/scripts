@@ -131,7 +131,7 @@ echo ${#ARR[@]}
  
 
 # Get script location
-echo `dirname ${BASH_SOURCE[0]}`
+cd `dirname ${BASH_SOURCE[0]}`
 
 
 # Run a command on a find result list
