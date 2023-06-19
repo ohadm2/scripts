@@ -184,6 +184,8 @@ done
 # "$?" = reffers to the last error code [make sure you use it RIGHT AFTER the cmd to test]
 # The SPACES are a MUST since the signs [ and ] are files!
 
+if [ -d "/etc/hosts2" -o -s "/etc/hosts2" ]; then echo dir/file; else echo neither dir nor file; fi
+
 # double negate examples
 if [ "$?" != 0 -a "$1" != "" ]; then
 
