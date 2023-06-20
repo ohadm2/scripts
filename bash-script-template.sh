@@ -78,6 +78,8 @@ date "+%d/%m/%Y %H:%M:%S"
 # ignore errors
 cmd 2>/dev/null
 
+# ignore ALL output
+cmd @>/dev/null
 
 # working with grep
 
@@ -130,8 +132,10 @@ ARR=($ARR)
 echo ${#ARR[@]}
  
 
-# Get script location
-cd `dirname ${BASH_SOURCE[0]}`
+# Get script location:
+cd $(dirname $(readlink -f "${BASH_SOURCE:-$0}"))
+# IMPORTANT!
+# if you cd to other locations inside your script, be sure to save the location to a variable using the cmd above before changing dirs and use the value to get back
 
 
 # Run a command on a find result list
