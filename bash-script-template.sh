@@ -193,7 +193,7 @@ if [ ! -s ~/temp/1.txt -o ! -s ~/temp/2.txt ]; then echo missing; fi
 
 if [ ! -d "/etc/hosts2" -a ! -s "/etc/hosts2" ]; then echo not-dir not-file; else echo dir or file; fi
 
-# a check to see if a given fs location is an empty folder or a non-exsistant fs location or if it is a non-empty folder or a file (a no overwrite verify test)
+# a check to see if a given fs location is an empty folder or a non-existent fs location or if it is a non-empty folder or a file (a no overwrite verify test)
 if [ -d "$MYSQL_INIT_DB_HOST_FOLDER" -a -n "$(ls -A $MYSQL_INIT_DB_HOST_FOLDER 2>/dev/null | head -1)" -o -a "$MYSQL_INIT_DB_HOST_FOLDER" -a ! -d "$MYSQL_INIT_DB_HOST_FOLDER" ]; then 
 	echo cannot use this location
 else 
