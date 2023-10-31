@@ -185,6 +185,8 @@ else
     echo "Directory is empty"
 fi
 
+if [ $(ls -A . | wc -w) -gt 5 ]; then echo "cool"; fi
+
 	
 # Conditions:
 # ! = not
