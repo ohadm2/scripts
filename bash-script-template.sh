@@ -176,6 +176,15 @@ for i in $TOKENS; do
 	echo $i
 done
 
+
+# check if a folder is empty or not
+
+if [ "$(ls -A /path/to/directory)" ]; then
+    echo "Directory is not empty"
+else
+    echo "Directory is empty"
+fi
+
 	
 # Conditions:
 # ! = not
