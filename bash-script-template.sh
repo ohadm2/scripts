@@ -254,6 +254,7 @@ done
 
 
 counter=0
+
 while [ $counter -lt 10 ]; do
     echo "Counter: $counter"
     counter=$((counter + 1))
