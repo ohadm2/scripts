@@ -265,6 +265,13 @@ sed "2 a $DATA" 1.txt
 
 
 
+# save a cmd output in an array (bash 4+)
+readarray -t ls_output_array < <(ls)
+
+
+
+
+
 
 # sed -i "s/\<.*\>/\<new_stuff\>/g" file_to_update
 				     
