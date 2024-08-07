@@ -219,7 +219,11 @@ if ! [ -s /etc/init.d/httpd ]; then
 else
 fi
 
-if ! [ -z "$SOME_VAR" ]; then
+if [ -z "$SOME_VAR" ]; then
+else
+fi
+
+if [ -n "$SOME_VAR" ]; then
 else
 fi
 
@@ -249,6 +253,12 @@ for i in $(ls); do
 done
 
 
+counter=0
+while [ $counter -lt 10 ]; do
+    echo "Counter: $counter"
+    counter=$((counter + 1))
+done
+
 
 # Using sed:
 
@@ -274,7 +284,10 @@ readarray -t ls_output_array < <(ls)
 echo ${ls_output_array[@]}
 
 # print items count
-echo ${ls_output_array[#]}
+echo ${#ls_output_array[@]}
+
+
+
 
 
 # sed -i "s/\<.*\>/\<new_stuff\>/g" file_to_update
