@@ -265,12 +265,16 @@ sed "2 a $DATA" 1.txt
 
 
 
+# arrays
+
 # save a cmd output in an array (bash 4+)
 readarray -t ls_output_array < <(ls)
 
+# print all items
+echo ${ls_output_array[@]}
 
-
-
+# print items count
+echo ${ls_output_array[#]}
 
 
 # sed -i "s/\<.*\>/\<new_stuff\>/g" file_to_update
