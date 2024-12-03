@@ -125,10 +125,16 @@ echo ${STR:0:2}
 
 # get number of tokens in a string (the delimiter is space)
 
-ARR='some string with words'
+STR='some string with words'
 
-ARR=($ARR)
+ARR=($STR)
 
+ARR=($(ls))
+
+# get items
+echo ${#ARR[@]}
+
+# get num of items
 echo ${#ARR[@]}
  
 
