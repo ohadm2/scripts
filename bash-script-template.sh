@@ -132,7 +132,7 @@ ARR=($STR)
 ARR=($(ls))
 
 # get items
-echo ${#ARR[@]}
+echo ${ARR[@]}
 
 # get num of items
 echo ${#ARR[@]}
