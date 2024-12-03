@@ -131,11 +131,15 @@ ARR=($STR)
 
 ARR=($(ls))
 
-# get items
+# print items
 echo ${ARR[@]}
 
-# get num of items
+# print num of items
 echo ${#ARR[@]}
+
+# arrays start with index 0
+# print the 1st item
+echo "${arr[0]}"
  
 
 # Get script location:
