@@ -57,7 +57,7 @@ done <<< "$CERTS"
 
 echo
 echo "Certs dir `pwd`:"
-echo "--------------"
+echo "------------------------"
 ls | grep "\.pem"
 
 
