@@ -1,5 +1,7 @@
 #!/bin/bash
 
+CERTS_LOCATION=/tmp
+
 # Check if domain argument is provided
 if [ -z "$1" ]; then
   echo "Usage: $0 <domain>"
@@ -14,7 +16,12 @@ VERIFY=3
 
 # Get certificate chain using OpenSSL
 #CERT_CHAIN=$(openssl s_client -showcerts -verify 5 "${DOMAIN}":443 </dev/null)
-
+if [ -d "$CERTS_LOCATION" ]; then
+  cd $CERTS_LOCATION
+else
+  SCRIPT_LOC=$(dirname $(readlink -f "${BASH_SOURCE:-$0}"))
+  cd $SCRIPT_LOC
+fi
 
 CERTS=$(openssl s_client -showcerts -verify ${VERIFY} -connect ${DOMAIN}:443 2>/dev/null < /dev/null | sed -n '/-----BEGIN CERTIFICATE-----/,/-----END CERTIFICATE-----/p')
 
