@@ -50,7 +50,7 @@ do
     echo
     
     NAME_COUNTER=$((NAME_COUNTER+1))
-    CURRENT_CERT_NAME="cert_"$NAME_COUNTER".pem"
+    CURRENT_CERT_NAME=$DOMAIN"_"$NAME_COUNTER".pem"
   fi
 
 done <<< "$CERTS"
