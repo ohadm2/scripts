@@ -55,6 +55,6 @@ do
 
 done <<< "$CERTS"
 
-ls
+ls | grep "\.pem"
 
 
