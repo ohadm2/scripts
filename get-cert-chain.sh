@@ -28,7 +28,7 @@ CERTS=$(openssl s_client -showcerts -verify ${VERIFY} -connect ${DOMAIN}:443 2>/
 i=0
 NAME_COUNTER=1
 
-CURRENT_CERT_NAME="cert_"$NAME_COUNTER".pem"
+CURRENT_CERT_NAME=$DOMAIN"_"$NAME_COUNTER".pem"
 
 while read -r line; 
 do
@@ -44,7 +44,7 @@ do
 
   if [ $i -gt 0 -a `expr $i % 2` -eq 0 ]; then
     echo "Certificate ('$CURRENT_CERT_NAME') info:"
-    echo "------------------------------------------------------------------"
+    echo "-------------------------------------------------------------------------------------------------"
     openssl x509 -inform PEM -in $CURRENT_CERT_NAME -noout -issuer -subject
     echo
     echo
@@ -55,6 +55,9 @@ do
 
 done <<< "$CERTS"
 
+echo
+echo "Certs dir:"
+echo "--------------"
 pwd
 ls | grep "\.pem"
 
