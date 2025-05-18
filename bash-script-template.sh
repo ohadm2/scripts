@@ -38,6 +38,13 @@ RESULT=$(returnSomething "myParam")
 read -p "name:" name;echo "hello $name"
 
 
+# parse a text file easily:
+while IFS=: read -r username _ uid _ _ home_dir shell; do
+    if [ "$uid" -ge 1000 ]; then
+        echo "$username has UID $uid, home $home_dir, shell $shell"
+    fi
+done < /etc/passwd
+
 # check if number using regex
 
 re='^[0-9]+$'
