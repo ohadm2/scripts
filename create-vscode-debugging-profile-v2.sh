@@ -1,0 +1,86 @@
+#!/bin/bash
+
+# user settings
+HOST_USER_TO_INSTALL_PROFILE_FOR=auser
+SITE_LOCATION=/docker-data/vanilla-drupal-9-env
+PROJECT_NAME=vanilla-drupal-9
+PHP_XDEBUG_CLIENT_PORT=9090
+# end user settings
+
+VSCODE_SETTINGS_FOLDER_NAME=.vscode
+VSCODE_RUNNING_CONFIGURATION_SETTINGS_FILE_NAME=launch.json
+VSCODE_RUNNING_CONFIGURATION_SETTINGS_TEMPLATE_FILE=launch.json.template
+VSCODE_RUNNING_CONFIGURATION_SETTINGS_PROFILE_NAME_PLACE_HOLDER="<XDEBUG_PROFILE_NAME>"
+VSCODE_RUNNING_CONFIGURATION_SETTINGS_PORT_PLACE_HOLDER="<XDEBUG_PORT>"
+
+
+SCRIPT_LOC=$(dirname $(readlink -f "${BASH_SOURCE:-$0}"))
+
+cd "$SCRIPT_LOC"
+
+
+if ! [ -s "$VSCODE_RUNNING_CONFIGURATION_SETTINGS_TEMPLATE_FILE" ]; then
+    echo "ERROR! Could not find the template file '$VSCODE_RUNNING_CONFIGURATION_SETTINGS_TEMPLATE_FILE'. Aborting ..."
+    
+    exit 1
+fi
+
+
+if ! [ "$1" == "" ]; then
+    HOST_USER_TO_INSTALL_PROFILE_FOR=$1
+fi
+
+if ! [ "$2" == "" ]; then
+    SITE_LOCATION=$2
+fi
+
+if ! [ "$3" == "" ]; then
+    PROJECT_NAME=$3
+fi
+
+if ! [ "$4" == "" ]; then
+    PHP_XDEBUG_CLIENT_PORT=$4
+fi
+
+
+
+if ! [ -d "$SITE_LOCATION"/"$VSCODE_SETTINGS_FOLDER_NAME" ]; then
+    sudo mkdir -p "$SITE_LOCATION"/"$VSCODE_SETTINGS_FOLDER_NAME"
+    sudo chown $HOST_USER_TO_INSTALL_PROFILE_FOR "$SITE_LOCATION"/"$VSCODE_SETTINGS_FOLDER_NAME"    
+    
+    if ! [ "$?" -eq 0 ]; then
+        echo "INFO: Could not create the folder '"$SITE_LOCATION"/"$VSCODE_SETTINGS_FOLDER_NAME"'."
+        echo "Try to fix manually."
+        
+        exit 1
+    fi
+fi
+
+
+if [ -s "$SITE_LOCATION"/"$VSCODE_SETTINGS_FOLDER_NAME"/"$VSCODE_RUNNING_CONFIGURATION_SETTINGS_FILE_NAME" ]; then
+    echo "INFO: Looks like the file '$SITE_LOCATION/$VSCODE_SETTINGS_FOLDER_NAME/$VSCODE_RUNNING_CONFIGURATION_SETTINGS_FILE_NAME' already exists."
+    echo "Will NOT overwite. Edit manually if needed."
+    
+    exit 2
+else
+    sudo cp -v $SCRIPT_LOC/$VSCODE_RUNNING_CONFIGURATION_SETTINGS_TEMPLATE_FILE $SITE_LOCATION/$VSCODE_SETTINGS_FOLDER_NAME/$VSCODE_RUNNING_CONFIGURATION_SETTINGS_FILE_NAME
+    sudo chown $HOST_USER_TO_INSTALL_PROFILE_FOR $SITE_LOCATION/$VSCODE_SETTINGS_FOLDER_NAME/$VSCODE_RUNNING_CONFIGURATION_SETTINGS_FILE_NAME
+    
+    if ! [ "$?" -eq 0 ]; then
+        echo "INFO: Could not copy the template file '$SCRIPT_LOC/$VSCODE_RUNNING_CONFIGURATION_SETTINGS_TEMPLATE_FILE' as '$SITE_LOCATION/$VSCODE_SETTINGS_FOLDER_NAME/$VSCODE_RUNNING_CONFIGURATION_SETTINGS_FILE_NAME'."
+        echo "Try to fix manually."
+        
+        exit 3
+    fi
+    
+    sudo sed -i "s/$VSCODE_RUNNING_CONFIGURATION_SETTINGS_PROFILE_NAME_PLACE_HOLDER/$PROJECT_NAME/" $SITE_LOCATION/$VSCODE_SETTINGS_FOLDER_NAME/$VSCODE_RUNNING_CONFIGURATION_SETTINGS_FILE_NAME &>/dev/null
+    sudo sed -i "s/$VSCODE_RUNNING_CONFIGURATION_SETTINGS_PORT_PLACE_HOLDER/$PHP_XDEBUG_CLIENT_PORT/" $SITE_LOCATION/$VSCODE_SETTINGS_FOLDER_NAME/$VSCODE_RUNNING_CONFIGURATION_SETTINGS_FILE_NAME &>/dev/null
+        
+    if ! [ "$?" -eq 0 ]; then
+        echo "INFO: failed to update some settings."
+        echo "Try to fix manually."
+        
+        exit 4        
+    fi    
+fi
+
