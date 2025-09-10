@@ -12,7 +12,7 @@ fi
 # Set domain from command line argument
 DOMAIN="$1"
 
-VERIFY=3
+VERIFY=5
 
 openssl version > /dev/null
 
