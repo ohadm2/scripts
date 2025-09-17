@@ -11,6 +11,22 @@ fi
 DOMAIN="$1"
 VERIFY=5
 
+if [ -d "$CERTS_LOCATION" ]; then
+  cd "$CERTS_LOCATION"
+else
+  # Try to determine script location portably
+  SCRIPT_PATH="$0"
+  
+  # If called with relative path, prepend PWD
+  case "$SCRIPT_PATH" in
+    /*) ;; # absolute path
+    *) SCRIPT_PATH="$(pwd)/$SCRIPT_PATH" ;;
+  esac
+
+  SCRIPT_LOC=$(dirname "$SCRIPT_PATH")
+  cd "$SCRIPT_LOC"
+fi
+
 if ! command -v openssl >/dev/null 2>&1; then
   echo "ERROR! openssl not found! Exiting ..."
   exit 1
