@@ -122,7 +122,7 @@ if len(sys.argv) < MINIMUM_ARGS:
 	
 	print "Error! Required parameters missing.\n"
 	print "Usage:\n" + sys.argv[0] + " <mail_server_ip> <recievers_list_csv_file> <file_to_email> <subject> <body>"
-	print "\nExample:\n " + sys.argv[0] + "  192.168.180.88 <(echo ohadm@gov.il) /tmp/fileToSend 'test-mail-subject' 'test-body'"
+	print "\nExample:\n " + sys.argv[0] + "  192.168.1.1 <(echo user@org.local) /tmp/fileToSend 'test-mail-subject' 'test-body'"
  
 else:
 	mail_server_ip = sys.argv[1]
