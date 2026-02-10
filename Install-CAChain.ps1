@@ -136,7 +136,11 @@ function Download-CertChain {
         
         # Get the chain
         $chain = New-Object System.Security.Cryptography.X509Certificates.X509Chain
-        $chain.Build($cert) | Out-Null
+        $chain.ChainPolicy.RevocationMode = [System.Security.Cryptography.X509Certificates.X509RevocationMode]::NoCheck
+        $chain.ChainPolicy.VerificationFlags = [System.Security.Cryptography.X509Certificates.X509VerificationFlags]::AllFlags
+        $buildResult = $chain.Build($cert)
+        
+        Write-Log "Chain build result: $buildResult, Chain elements: $($chain.ChainElements.Count)"
         
         $sslStream.Close()
         $tcpClient.Close()
@@ -170,7 +174,16 @@ function Download-CertChain {
         }
         
         if ($certFiles.Count -eq 0) {
-            throw "No CA certificates found in chain"
+            Write-Log "Warning: No CA certificates found in chain. This may be normal for some sites."
+            Write-Log "Creating bundle with end certificate only (not recommended for CA trust)."
+            
+            # Export the end certificate as fallback
+            $certFile = Join-Path $CertsDir "${Domain}_1.pem"
+            $pemCert = "-----BEGIN CERTIFICATE-----`r`n"
+            $pemCert += [Convert]::ToBase64String($cert.RawData, [System.Base64FormattingOptions]::InsertLineBreaks)
+            $pemCert += "`r`n-----END CERTIFICATE-----`r`n"
+            Set-Content -Path $certFile -Value $pemCert -Encoding ASCII
+            $certFiles += $certFile
         }
         
         # Create combined CA bundle
