@@ -132,7 +132,7 @@ function Download-CertChain {
         $sslStream.AuthenticateAsClient($Domain)
         
         $certChain = $sslStream.RemoteCertificate.Export([System.Security.Cryptography.X509Certificates.X509ContentType]::Cert)
-        $cert = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2($certChain)
+        $cert = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2 -ArgumentList @(,$certChain)
         
         # Get the chain
         $chain = New-Object System.Security.Cryptography.X509Certificates.X509Chain
@@ -161,7 +161,7 @@ function Download-CertChain {
             
             Set-Content -Path $certFile -Value $pemCert -Encoding ASCII
             
-            Write-Log "Certificate $certNum: $certFile"
+            Write-Log "Certificate $($certNum): $certFile"
             Write-Log "  Subject: $($chainCert.Subject)"
             Write-Log "  Issuer:  $($chainCert.Issuer)"
             
