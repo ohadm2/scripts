@@ -33,82 +33,32 @@ function Get-RemoteCertChain {
         [int]$PortNumber
     )
 
-    try {
-        $tcp = New-Object System.Net.Sockets.TcpClient
-        $tcp.Connect($Hostname, $PortNumber)
-        $stream = $tcp.GetStream()
-
-        # Certificate validation callback that accepts all certificates
-        $certCallback = [System.Net.Security.RemoteCertificateValidationCallback] {
-            param($sender, $cert, $chain, $sslPolicyErrors)
-            return $true
-        }
-
-        $sslStream = New-Object System.Net.Security.SslStream($stream, $false, $certCallback)
-
-        $sslStream.AuthenticateAsClient($Hostname)
-
-        $remoteCert = $sslStream.RemoteCertificate
-        $chain = New-Object System.Security.Cryptography.X509Certificates.X509Chain
-
-        $null = $chain.Build($remoteCert)
-
-        $certs = @()
-        foreach ($element in $chain.ChainElements) {
-            if ($element.Certificate -is [System.Security.Cryptography.X509Certificates.X509Certificate2]) {
-                $certs += $element.Certificate
-            }
-        }
-
-        $sslStream.Close()
-        $tcp.Close()
-
-        return $certs
-
-    } catch {
-        Write-Error "Failed to retrieve certificate chain from ${Hostname}:${PortNumber} — $_"
-        return $null
-    }
-}
-
-function Get-RemoteCertChain {
-    param(
-        [string]$Hostname,
-        [int]$PortNumber
-    )
+    # Script-scope variable to capture certs from the callback
+    $script:capturedCerts = @()
 
     try {
         $tcp = New-Object System.Net.Sockets.TcpClient
         $tcp.Connect($Hostname, $PortNumber)
         $stream = $tcp.GetStream()
 
-        # Define the callback separately to avoid PS 5.1 parsing issues
+        # Capture the full chain inside the callback
         $certCallback = {
             param($sender, $cert, $chain, $sslPolicyErrors)
+            
+            foreach ($element in $chain.ChainElements) {
+                # Clone each certificate so it persists after callback
+                $script:capturedCerts += New-Object System.Security.Cryptography.X509Certificates.X509Certificate2($element.Certificate)
+            }
             return $true
         }
 
         $sslStream = New-Object System.Net.Security.SslStream($stream, $false, $certCallback)
-
         $sslStream.AuthenticateAsClient($Hostname)
-
-        $remoteCert = $sslStream.RemoteCertificate
-        $chain = New-Object System.Security.Cryptography.X509Certificates.X509Chain
-
-        $null = $chain.Build($remoteCert)
-
-        $certs = @()
-
-        foreach ($element in $chain.ChainElements) {
-            if ($element.Certificate -is [System.Security.Cryptography.X509Certificates.X509Certificate2]) {
-                $certs += $element.Certificate
-            }
-        }
 
         $sslStream.Close()
         $tcp.Close()
 
-        return $certs
+        return $script:capturedCerts
     }
     catch {
         Write-Error "Failed to retrieve certificate chain from ${Hostname}:${PortNumber} - $_"
@@ -135,23 +85,17 @@ function Print-CertInfo {
         [int]$Index
     )
 
-    $subject = $Cert.Subject
-    $issuer = $Cert.Issuer
-    $validFrom = $Cert.NotBefore
-    $validTo = $Cert.NotAfter
-
     Write-Host "Certificate #$Index"
-    Write-Host "  Subject     : $subject"
-    Write-Host "  Issuer      : $issuer"
-    Write-Host "  Valid From  : $validFrom"
-    Write-Host "  Valid Until : $validTo"
+    Write-Host "  Subject     : $($Cert.Subject)"
+    Write-Host "  Issuer      : $($Cert.Issuer)"
+    Write-Host "  Valid From  : $($Cert.NotBefore)"
+    Write-Host "  Valid Until : $($Cert.NotAfter)"
     Write-Host "  Thumbprint  : $($Cert.Thumbprint)"
     Write-Host ""
 }
 
 # Main script logic
 
-# Ensure output directory exists
 if (-not (Test-Path $OutputDir)) {
     New-Item -ItemType Directory -Path $OutputDir -Force | Out-Null
 }
