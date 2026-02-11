@@ -71,6 +71,51 @@ function Get-RemoteCertChain {
     }
 }
 
+function Get-RemoteCertChain {
+    param(
+        [string]$Hostname,
+        [int]$PortNumber
+    )
+
+    try {
+        $tcp = New-Object System.Net.Sockets.TcpClient
+        $tcp.Connect($Hostname, $PortNumber)
+        $stream = $tcp.GetStream()
+
+        # Define the callback separately to avoid PS 5.1 parsing issues
+        $certCallback = {
+            param($sender, $cert, $chain, $sslPolicyErrors)
+            return $true
+        }
+
+        $sslStream = New-Object System.Net.Security.SslStream($stream, $false, $certCallback)
+
+        $sslStream.AuthenticateAsClient($Hostname)
+
+        $remoteCert = $sslStream.RemoteCertificate
+        $chain = New-Object System.Security.Cryptography.X509Certificates.X509Chain
+
+        $null = $chain.Build($remoteCert)
+
+        $certs = @()
+
+        foreach ($element in $chain.ChainElements) {
+            if ($element.Certificate -is [System.Security.Cryptography.X509Certificates.X509Certificate2]) {
+                $certs += $element.Certificate
+            }
+        }
+
+        $sslStream.Close()
+        $tcp.Close()
+
+        return $certs
+    }
+    catch {
+        Write-Error "Failed to retrieve certificate chain from ${Hostname}:${PortNumber} - $_"
+        return $null
+    }
+}
+
 function Export-CertToFile {
     param(
         [System.Security.Cryptography.X509Certificates.X509Certificate2]$Cert,
