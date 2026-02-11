@@ -372,8 +372,12 @@ function Install-SystemCA {
         
         foreach ($match in $certMatches) {
             $certPem = $match.Value
-            $certBytes = [System.Text.Encoding]::ASCII.GetBytes($certPem)
-            $cert = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2($certBytes)
+            
+            # Convert PEM to bytes
+            $certText = $certPem -replace "-----BEGIN CERTIFICATE-----", "" -replace "-----END CERTIFICATE-----", "" -replace "`r", "" -replace "`n", ""
+            $certBytes = [Convert]::FromBase64String($certText)
+            
+            $cert = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2 -ArgumentList @(,$certBytes)
             
             # Install to Root store
             $store = New-Object System.Security.Cryptography.X509Certificates.X509Store("Root", "LocalMachine")
