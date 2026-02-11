@@ -643,6 +643,19 @@ function Configure-Curl {
     # Set system environment variable
     [System.Environment]::SetEnvironmentVariable("CURL_CA_BUNDLE", $CABundle, "Machine")
     Write-Log "Set CURL_CA_BUNDLE environment variable"
+    
+    # Also install to Windows System32 curl's default location
+    $curlCaBundle = "C:\Windows\System32\curl-ca-bundle.crt"
+    
+    if (Test-Path "C:\Windows\System32\curl.exe") {
+        try {
+            Backup-File $curlCaBundle
+            Copy-Item -Path $CABundle -Destination $curlCaBundle -Force
+            Write-Log "Installed to: $curlCaBundle"
+        } catch {
+            Write-Log "Could not install to System32 curl location: $_"
+        }
+    }
 }
 
 # Main execution
