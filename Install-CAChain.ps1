@@ -125,33 +125,43 @@ function Download-CertChain {
         New-Item -ItemType Directory -Path $CertsDir -Force | Out-Null
     }
     
+    # Script-scope variable to capture certs from the callback
+    $script:capturedCerts = @()
+    
     # Download certificate chain using .NET
     try {
-        $tcpClient = New-Object System.Net.Sockets.TcpClient($Domain, $Port)
-        $sslStream = New-Object System.Net.Security.SslStream($tcpClient.GetStream(), $false, {$true})
+        $tcp = New-Object System.Net.Sockets.TcpClient
+        $tcp.Connect($Domain, $Port)
+        $stream = $tcp.GetStream()
+
+        # Capture the full chain inside the callback
+        $certCallback = {
+            param($sender, $cert, $chain, $sslPolicyErrors)
+            
+            foreach ($element in $chain.ChainElements) {
+                # Clone each certificate so it persists after callback
+                $script:capturedCerts += New-Object System.Security.Cryptography.X509Certificates.X509Certificate2($element.Certificate)
+            }
+            return $true
+        }
+
+        $sslStream = New-Object System.Net.Security.SslStream($stream, $false, $certCallback)
         $sslStream.AuthenticateAsClient($Domain)
-        
-        $certChain = $sslStream.RemoteCertificate.Export([System.Security.Cryptography.X509Certificates.X509ContentType]::Cert)
-        $cert = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2 -ArgumentList @(,$certChain)
-        
-        # Get the chain
-        $chain = New-Object System.Security.Cryptography.X509Certificates.X509Chain
-        $chain.ChainPolicy.RevocationMode = [System.Security.Cryptography.X509Certificates.X509RevocationMode]::NoCheck
-        $chain.ChainPolicy.VerificationFlags = [System.Security.Cryptography.X509Certificates.X509VerificationFlags]::AllFlags
-        $buildResult = $chain.Build($cert)
-        
-        Write-Log "Chain build result: $buildResult, Chain elements: $($chain.ChainElements.Count)"
-        
+
         $sslStream.Close()
-        $tcpClient.Close()
+        $tcp.Close()
+        
+        if ($script:capturedCerts.Count -eq 0) {
+            throw "No certificates captured from chain"
+        }
+        
+        Write-Log "Captured $($script:capturedCerts.Count) certificates from chain"
         
         # Export certificates (skip the first one - end certificate)
         $certFiles = @()
         $certNum = 1
         
-        foreach ($chainElement in $chain.ChainElements) {
-            $chainCert = $chainElement.Certificate
-            
+        foreach ($cert in $script:capturedCerts) {
             # Skip end certificate (first one)
             if ($certNum -eq 1) {
                 $certNum++
@@ -160,24 +170,24 @@ function Download-CertChain {
             
             $certFile = Join-Path $CertsDir "${Domain}_${certNum}.pem"
             $pemCert = "-----BEGIN CERTIFICATE-----`r`n"
-            $pemCert += [Convert]::ToBase64String($chainCert.RawData, [System.Base64FormattingOptions]::InsertLineBreaks)
+            $pemCert += [Convert]::ToBase64String($cert.RawData, [System.Base64FormattingOptions]::InsertLineBreaks)
             $pemCert += "`r`n-----END CERTIFICATE-----`r`n"
             
             Set-Content -Path $certFile -Value $pemCert -Encoding ASCII
             
             Write-Log "Certificate $($certNum): $certFile"
-            Write-Log "  Subject: $($chainCert.Subject)"
-            Write-Log "  Issuer:  $($chainCert.Issuer)"
+            Write-Log "  Subject: $($cert.Subject)"
+            Write-Log "  Issuer:  $($cert.Issuer)"
             
             $certFiles += $certFile
             $certNum++
         }
         
         if ($certFiles.Count -eq 0) {
-            Write-Log "Warning: No CA certificates found in chain. This may be normal for some sites."
-            Write-Log "Creating bundle with end certificate only (not recommended for CA trust)."
+            Write-Log "Warning: No CA certificates found in chain. Using end certificate as fallback."
             
             # Export the end certificate as fallback
+            $cert = $script:capturedCerts[0]
             $certFile = Join-Path $CertsDir "${Domain}_1.pem"
             $pemCert = "-----BEGIN CERTIFICATE-----`r`n"
             $pemCert += [Convert]::ToBase64String($cert.RawData, [System.Base64FormattingOptions]::InsertLineBreaks)
