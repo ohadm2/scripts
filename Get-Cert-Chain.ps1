@@ -38,17 +38,20 @@ function Get-RemoteCertChain {
         $tcp.Connect($Hostname, $PortNumber)
         $stream = $tcp.GetStream()
 
-        $sslStream = New-Object System.Net.Security.SslStream($stream, $false, {
+        # Certificate validation callback that accepts all certificates
+        $certCallback = [System.Net.Security.RemoteCertificateValidationCallback] {
             param($sender, $cert, $chain, $sslPolicyErrors)
             return $true
-        })
+        }
+
+        $sslStream = New-Object System.Net.Security.SslStream($stream, $false, $certCallback)
 
         $sslStream.AuthenticateAsClient($Hostname)
 
         $remoteCert = $sslStream.RemoteCertificate
         $chain = New-Object System.Security.Cryptography.X509Certificates.X509Chain
 
-        $null = $chain.Build($remoteCert)  # Prevents $true from leaking
+        $null = $chain.Build($remoteCert)
 
         $certs = @()
         foreach ($element in $chain.ChainElements) {
@@ -60,7 +63,7 @@ function Get-RemoteCertChain {
         $sslStream.Close()
         $tcp.Close()
 
-        return $certs  # Explicitly return only certs
+        return $certs
 
     } catch {
         Write-Error "Failed to retrieve certificate chain from ${Hostname}:${PortNumber} — $_"
