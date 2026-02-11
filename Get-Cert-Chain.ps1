@@ -38,9 +38,10 @@ function Get-RemoteCertChain {
         $tcp.Connect($Hostname, $PortNumber)
         $stream = $tcp.GetStream()
 
-        $sslStream = New-Object System.Net.Security.SslStream($stream, $false, (
-            { param($sender, $cert, $chain, $sslPolicyErrors) $true }
-        ))
+        $sslStream = New-Object System.Net.Security.SslStream($stream, $false, {
+            param($sender, $cert, $chain, $sslPolicyErrors)
+            return $true
+        })
 
         $sslStream.AuthenticateAsClient($Hostname)
 
