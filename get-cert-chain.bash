@@ -12,14 +12,7 @@ fi
 # Set domain from command line argument
 DOMAIN="$1"
 
-VERIFY=5
-
-openssl version > /dev/null
-
-if ! [ "$?" -eq 0 ]; then
-  echo "ERROR! openssl not found! Exiting ..."
-  exit 1
-fi
+VERIFY=3
 
 # Get certificate chain using OpenSSL
 #CERT_CHAIN=$(openssl s_client -showcerts -verify 5 "${DOMAIN}":443 </dev/null)
