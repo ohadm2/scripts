@@ -36,8 +36,9 @@ fi
 CERTS=$(openssl s_client -showcerts -verify "$VERIFY" "${DOMAIN}":443 </dev/null 2>/dev/null | sed -n '/-----BEGIN CERTIFICATE-----/,/-----END CERTIFICATE-----/p')
 
 i=0
-NAME_COUNTER=1
-CURRENT_CERT_NAME="${DOMAIN}_${NAME_COUNTER}.pem"
+CERT_NUM=0
+TMPFILE="${DOMAIN}_tmp.pem"
+CA_COUNTER=1
 
 printf '%s\n' "$CERTS" | while IFS= read -r line; do
   case "$line" in
@@ -45,22 +46,40 @@ printf '%s\n' "$CERTS" | while IFS= read -r line; do
       i=$((i + 1))
       case "$line" in
         *BEGIN*)
-          : > "$CURRENT_CERT_NAME"
+          : > "$TMPFILE"
           ;;
       esac
       ;;
   esac
 
-  echo "$line" >> "$CURRENT_CERT_NAME"
+  echo "$line" >> "$TMPFILE"
 
   # test even number of CERTIFICATE lines
   if [ "$i" -gt 0 ] && [ $(( i % 2 )) -eq 0 ]; then
-    echo "Certificate ('$CURRENT_CERT_NAME') info:"
-    echo "-------------------------------------------------------------------------------------------------"
-    openssl x509 -inform PEM -in "$CURRENT_CERT_NAME" -noout -issuer -subject -dates -serial -fingerprint
-    echo
-    NAME_COUNTER=$(( NAME_COUNTER + 1 ))
-    CURRENT_CERT_NAME="${DOMAIN}_${NAME_COUNTER}.pem"
+    CERT_NUM=$((CERT_NUM + 1))
+
+    # Skip the first cert (end-entity/leaf)
+    if [ "$CERT_NUM" -eq 1 ]; then
+      rm -f "$TMPFILE"
+    else
+      # Determine root vs intermediate
+      ISSUER=$(openssl x509 -in "$TMPFILE" -noout -issuer 2>/dev/null)
+      SUBJECT=$(openssl x509 -in "$TMPFILE" -noout -subject 2>/dev/null)
+      if [ "$ISSUER" = "$(echo "$SUBJECT" | sed 's/^subject/issuer/')" ]; then
+        CA_TYPE="root"
+      else
+        CA_TYPE="intermediate"
+      fi
+
+      FINAL_NAME="${DOMAIN}_${CA_TYPE}_${CA_COUNTER}.pem"
+      mv "$TMPFILE" "$FINAL_NAME"
+
+      echo "CA Certificate ('$FINAL_NAME') [$CA_TYPE]:"
+      echo "-------------------------------------------------------------------------------------------------"
+      openssl x509 -inform PEM -in "$FINAL_NAME" -noout -issuer -subject -dates -serial -fingerprint
+      echo
+      CA_COUNTER=$((CA_COUNTER + 1))
+    fi
   fi
 
 done
