@@ -69,3 +69,4 @@ echo
 echo "Certs dir $(pwd):"
 echo "------------------------"
 ls | grep "\.pem"
+
