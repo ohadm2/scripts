@@ -45,7 +45,7 @@ do
   if [ $i -gt 0 -a `expr $i % 2` -eq 0 ]; then
     echo "Certificate ('$CURRENT_CERT_NAME') info:"
     echo "-------------------------------------------------------------------------------------------------"
-    openssl x509 -inform PEM -in $CURRENT_CERT_NAME -noout -issuer -subject
+    openssl x509 -inform PEM -in $CURRENT_CERT_NAME -noout -issuer -subject -dates -serial -fingerprint
     echo
     echo
     
