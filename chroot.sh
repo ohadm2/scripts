@@ -11,8 +11,9 @@ if [ "$1" ]; then
   PART="$1"
 else
   # Find the largest non-mounted Linux partition (ext4/xfs/btrfs)
-  PART=$(lsblk -lnpo NAME,SIZE,FSTYPE,MOUNTPOINT \
-    | awk '$3 ~ /ext4|xfs|btrfs/ && $4 == "" {print $2, $1}' \
+  # Excludes loop devices, device-mapper (live CD), and ROM devices
+  PART=$(lsblk -lnpo NAME,SIZE,FSTYPE,MOUNTPOINT,TYPE \
+    | awk '$3 ~ /ext4|xfs|btrfs/ && $4 == "" && $5 == "part" {print $2, $1}' \
     | sort -h | tail -1 | awk '{print $2}')
 
   if [ -z "$PART" ]; then
