@@ -5,16 +5,27 @@
 
 set -e
 
-DIR=/mnt
+DIR=/media/rescue
+
+mkdir -p "$DIR"
 
 if [ "$1" ]; then
   PART="$1"
 else
-  # Find the largest non-mounted Linux partition (ext4/xfs/btrfs)
-  # Excludes loop devices, device-mapper (live CD), and ROM devices
+  # Find the largest non-mounted Linux partition
+  # First try: partitions with known Linux filesystems
+  # Fallback: largest unmounted partition >10G (FSTYPE may be blank if not probed)
   PART=$(lsblk -lnpo NAME,SIZE,FSTYPE,MOUNTPOINT,TYPE \
-    | awk '$3 ~ /ext4|xfs|btrfs/ && $4 == "" && $5 == "part" && $1 !~ /loop|mapper/ {print $2, $1}' \
+    | awk '$5 == "part" && $1 !~ /loop|mapper/ && $4 == "" && $3 ~ /ext4|xfs|btrfs/ {print $2, $1}' \
     | sort -h | tail -1 | awk '{print $2}')
+
+  if [ -z "$PART" ]; then
+    PART=$(lsblk -lnpo NAME,SIZE,FSTYPE,MOUNTPOINT,TYPE \
+      | awk '$5 == "part" && $1 !~ /loop|mapper/ && $4 == "" && $3 !~ /vfat|swap|ntfs/ {
+          gsub(/[^0-9.]/, "", $2); if ($2+0 > 10) print $2, $1
+        }' \
+      | sort -h | tail -1 | awk '{print $2}')
+  fi
 
   if [ -z "$PART" ]; then
     echo "ERROR: No unmounted Linux partition found."
