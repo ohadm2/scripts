@@ -40,7 +40,7 @@ do
     fi
   fi
     
-  echo $line >> $TMPFILE
+  echo "$line" >> $TMPFILE
 
   if [ $i -gt 0 -a `expr $i % 2` -eq 0 ]; then
     CERT_NUM=$((CERT_NUM+1))
