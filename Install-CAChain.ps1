@@ -49,6 +49,16 @@
 .PARAMETER SkipCurl
     Skip curl configuration
     
+.PARAMETER Proxy
+    Route the certificate download through a proxy.
+    If specified without a value, uses HTTPS_PROXY or https_proxy env var.
+    
+.PARAMETER DownloadOnly
+    Download the CA chain as a single base64 file and exit
+    
+.PARAMETER InfoOnly
+    Print certificate chain info (subject, issuer, dates) and exit
+    
 .EXAMPLE
     .\Install-CAChain.ps1
     
@@ -57,6 +67,18 @@
     
 .EXAMPLE
     .\Install-CAChain.ps1 -Domain internal.corp.com -SkipPython -SkipRuby
+
+.EXAMPLE
+    .\Install-CAChain.ps1 -Proxy http://proxy:8080 -Domain google.com
+
+.EXAMPLE
+    .\Install-CAChain.ps1 -Proxy -Domain google.com  # uses HTTPS_PROXY env var
+
+.EXAMPLE
+    .\Install-CAChain.ps1 -DownloadOnly -Domain google.com
+
+.EXAMPLE
+    .\Install-CAChain.ps1 -InfoOnly -Domain google.com
 #>
 
 [CmdletBinding()]
@@ -78,8 +100,29 @@ param(
     [switch]$SkipGcloud,
     [switch]$SkipAWS,
     [switch]$SkipComposer,
-    [switch]$SkipCurl
+    [switch]$SkipCurl,
+    
+    [Parameter()]
+    [AllowEmptyString()]
+    [string]$Proxy,
+    
+    [switch]$DownloadOnly,
+    [switch]$InfoOnly
 )
+
+# Resolve proxy value
+$ProxyUrl = ""
+if ($PSBoundParameters.ContainsKey('Proxy')) {
+    if ([string]::IsNullOrEmpty($Proxy)) {
+        $ProxyUrl = if ($env:HTTPS_PROXY) { $env:HTTPS_PROXY } elseif ($env:https_proxy) { $env:https_proxy } else { "" }
+        if ([string]::IsNullOrEmpty($ProxyUrl)) {
+            Write-Error "--Proxy: no URL given and HTTPS_PROXY / https_proxy not set"
+            exit 1
+        }
+    } else {
+        $ProxyUrl = $Proxy
+    }
+}
 
 $ErrorActionPreference = "Stop"
 $BackupSuffix = "backup-$(Get-Date -Format 'yyyyMMdd-HHmmss')"
@@ -115,10 +158,12 @@ function Backup-File {
 function Download-CertChain {
     param(
         [string]$Domain,
-        [int]$Port
+        [int]$Port,
+        [string]$ProxyUrl = ""
     )
     
     Write-Log "Downloading certificate chain from ${Domain}:${Port}..."
+    if ($ProxyUrl) { Write-Log "Using proxy: $ProxyUrl" }
     
     # Create certs directory
     if (-not (Test-Path $CertsDir)) {
@@ -131,8 +176,23 @@ function Download-CertChain {
     # Download certificate chain using .NET
     try {
         $tcp = New-Object System.Net.Sockets.TcpClient
-        $tcp.Connect($Domain, $Port)
-        $stream = $tcp.GetStream()
+        
+        if ($ProxyUrl) {
+            $proxyUri = [System.Uri]::new($ProxyUrl)
+            $proxySocket = New-Object System.Net.Sockets.TcpClient
+            $proxySocket.Connect($proxyUri.Host, $proxyUri.Port)
+            $proxyStream = $proxySocket.GetStream()
+            $connectRequest = [System.Text.Encoding]::ASCII.GetBytes("CONNECT ${Domain}:${Port} HTTP/1.1`r`nHost: ${Domain}:${Port}`r`n`r`n")
+            $proxyStream.Write($connectRequest, 0, $connectRequest.Length)
+            $buffer = New-Object byte[] 4096
+            $bytesRead = $proxyStream.Read($buffer, 0, $buffer.Length)
+            $response = [System.Text.Encoding]::ASCII.GetString($buffer, 0, $bytesRead)
+            if ($response -notmatch "200") { throw "Proxy CONNECT failed: $response" }
+            $stream = $proxyStream
+        } else {
+            $tcp.Connect($Domain, $Port)
+            $stream = $tcp.GetStream()
+        }
 
         # Capture the full chain inside the callback
         $certCallback = {
@@ -668,12 +728,61 @@ function Configure-Curl {
     }
 }
 
+function Print-ChainInfo {
+    param([string]$Domain, [int]$Port, [string]$ProxyUrl = "")
+    
+    Write-Log "Fetching certificate chain info from ${Domain}:${Port}..."
+    
+    $caBundle = Download-CertChain -Domain $Domain -Port $Port -ProxyUrl $ProxyUrl
+    $certContent = Get-Content $caBundle -Raw
+    $certMatches = [regex]::Matches($certContent, "-----BEGIN CERTIFICATE-----.*?-----END CERTIFICATE-----", [System.Text.RegularExpressions.RegexOptions]::Singleline)
+    
+    $certNum = 1
+    foreach ($match in $certMatches) {
+        $certText = $match.Value -replace "-----BEGIN CERTIFICATE-----", "" -replace "-----END CERTIFICATE-----", "" -replace "`r", "" -replace "`n", ""
+        $certBytes = [Convert]::FromBase64String($certText)
+        $cert = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2 -ArgumentList @(,$certBytes)
+        
+        Write-Host "=== Certificate $certNum ==="
+        Write-Host "  Subject:    $($cert.Subject)"
+        Write-Host "  Issuer:     $($cert.Issuer)"
+        Write-Host "  Not Before: $($cert.NotBefore)"
+        Write-Host "  Not After:  $($cert.NotAfter)"
+        Write-Host "  Thumbprint: $($cert.Thumbprint)"
+        Write-Host ""
+        $certNum++
+    }
+}
+
+function Save-DownloadOnly {
+    param([string]$Domain, [int]$Port, [string]$ProxyUrl = "")
+    
+    $caBundle = Download-CertChain -Domain $Domain -Port $Port -ProxyUrl $ProxyUrl
+    $outFile = Join-Path $CertsDir "${Domain}_ca_chain.b64"
+    $bytes = [System.IO.File]::ReadAllBytes($caBundle)
+    [System.IO.File]::WriteAllText($outFile, [Convert]::ToBase64String($bytes))
+    Write-Log "Saved base64-encoded CA chain to: $outFile"
+    Write-Log "PEM file also available at: $caBundle"
+}
+
 # Main execution
 try {
     Write-Log "Starting CA chain installation for: $Domain"
     
+    # Handle info-only mode
+    if ($InfoOnly) {
+        Print-ChainInfo -Domain $Domain -Port $Port -ProxyUrl $ProxyUrl
+        exit 0
+    }
+    
+    # Handle download-only mode
+    if ($DownloadOnly) {
+        Save-DownloadOnly -Domain $Domain -Port $Port -ProxyUrl $ProxyUrl
+        exit 0
+    }
+    
     # Download certificates
-    $caBundle = Download-CertChain -Domain $Domain -Port $Port
+    $caBundle = Download-CertChain -Domain $Domain -Port $Port -ProxyUrl $ProxyUrl
     
     # Detect installations
     if (-not $SkipPython) { Detect-PythonCertifi }

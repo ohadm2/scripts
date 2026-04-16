@@ -70,6 +70,10 @@ Options:
     -h, --help      Show this help message
     -d, --dir DIR   Directory to store certificates (default: $CERTS_DIR)
     -p, --port PORT Port to connect to (default: 443)
+    --proxy [URL]   Route the certificate download through a proxy.
+                    If no URL is given, uses HTTPS_PROXY or https_proxy env var.
+    --download-only Download the CA chain as a single base64 PEM file and exit
+    --info-only     Print certificate chain info (subject, issuer, dates) and exit
     --skip-system   Skip system CA bundle installation
     --skip-python   Skip Python certifi installation
     --skip-ruby     Skip Ruby installation
@@ -89,6 +93,10 @@ Examples:
     $SCRIPT_NAME gitlab.example.com
     $SCRIPT_NAME --dir /opt/certs google.com
     $SCRIPT_NAME --skip-python --skip-node internal.corp.com
+    $SCRIPT_NAME --proxy http://proxy:8080 google.com
+    $SCRIPT_NAME --proxy google.com          # uses HTTPS_PROXY env var
+    $SCRIPT_NAME --download-only google.com
+    $SCRIPT_NAME --info-only google.com
 
 EOF
     exit 0
@@ -114,6 +122,7 @@ backup_file() {
 download_cert_chain() {
     local domain="$1"
     local port="${2:-443}"
+    local proxy_url="${3:-}"
     
     log "Downloading certificate chain from ${domain}:${port}..."
     
@@ -121,8 +130,12 @@ download_cert_chain() {
     cd "$CERTS_DIR"
     
     # Get certificate chain
-    local certs
-    certs=$(openssl s_client -showcerts -verify 5 -connect "${domain}:${port}" 2>/dev/null </dev/null \
+    local certs openssl_proxy_args=()
+    if [[ -n "$proxy_url" ]]; then
+        log "Using proxy: $proxy_url"
+        openssl_proxy_args=(-proxy "$(echo "$proxy_url" | sed 's|^https\?://||')")
+    fi
+    certs=$(openssl s_client -showcerts -verify 5 -connect "${domain}:${port}" "${openssl_proxy_args[@]}" 2>/dev/null </dev/null \
         | sed -n '/-----BEGIN CERTIFICATE-----/,/-----END CERTIFICATE-----/p')
     
     if [[ -z "$certs" ]]; then
@@ -583,7 +596,7 @@ EOF
     log "Created: $profile_file"
 }
 
-install_ruby_ca() {
+install_java_ca() {
     local ca_bundle="$1"
     
     if ! command -v keytool &>/dev/null; then
@@ -653,6 +666,55 @@ configure_docker() {
     log "Copied to: ${docker_certs_dir}/ca.crt"
 }
 
+print_chain_info() {
+    local domain="$1"
+    local port="${2:-443}"
+    local proxy_url="${3:-}"
+
+    log "Fetching certificate chain info from ${domain}:${port}..."
+
+    local openssl_proxy_args=()
+    if [[ -n "$proxy_url" ]]; then
+        openssl_proxy_args=(-proxy "$(echo "$proxy_url" | sed 's|^https\?://||')")
+    fi
+
+    local certs
+    certs=$(openssl s_client -showcerts -verify 5 -connect "${domain}:${port}" "${openssl_proxy_args[@]}" 2>/dev/null </dev/null \
+        | sed -n '/-----BEGIN CERTIFICATE-----/,/-----END CERTIFICATE-----/p')
+
+    if [[ -z "$certs" ]]; then
+        error "Failed to download certificates from ${domain}:${port}"
+    fi
+
+    local cert_num=1 current_cert="" in_cert=false
+    while IFS= read -r line; do
+        if [[ "$line" == "-----BEGIN CERTIFICATE-----" ]]; then
+            in_cert=true; current_cert="$line"
+        elif [[ "$line" == "-----END CERTIFICATE-----" ]]; then
+            current_cert+=$'\n'"$line"
+            echo "=== Certificate $cert_num ==="
+            echo "$current_cert" | openssl x509 -noout -subject -issuer -dates -fingerprint 2>/dev/null
+            echo ""
+            ((cert_num++)); in_cert=false; current_cert=""
+        elif [[ "$in_cert" == true ]]; then
+            current_cert+=$'\n'"$line"
+        fi
+    done <<< "$certs"
+}
+
+download_only() {
+    local domain="$1"
+    local port="${2:-443}"
+    local proxy_url="${3:-}"
+
+    local ca_bundle
+    ca_bundle=$(download_cert_chain "$domain" "$port" "$proxy_url")
+    local out_file="${CERTS_DIR}/${domain}_ca_chain.b64"
+    base64 -w0 < "${CERTS_DIR}/${ca_bundle}" > "$out_file"
+    log "Saved base64-encoded CA chain to: $out_file"
+    log "PEM file also available at: ${CERTS_DIR}/${ca_bundle}"
+}
+
 main() {
     local domain="$DEFAULT_DOMAIN"
     local port=443
@@ -670,6 +732,8 @@ main() {
     local skip_wget=false
     local skip_curl=false
     local skip_mingw=false
+    local proxy_url=""
+    local mode="install"  # install | download-only | info-only
     
     # Parse arguments
     while [[ $# -gt 0 ]]; do
@@ -684,6 +748,24 @@ main() {
             -p|--port)
                 port="$2"
                 shift 2
+                ;;
+            --proxy)
+                if [[ -n "${2:-}" && "${2:0:1}" != "-" ]]; then
+                    proxy_url="$2"
+                    shift 2
+                else
+                    proxy_url="${HTTPS_PROXY:-${https_proxy:-}}"
+                    [[ -z "$proxy_url" ]] && error "--proxy: no URL given and HTTPS_PROXY / https_proxy not set"
+                    shift
+                fi
+                ;;
+            --download-only)
+                mode="download-only"
+                shift
+                ;;
+            --info-only)
+                mode="info-only"
+                shift
                 ;;
             --skip-system)
                 skip_system=true
@@ -752,15 +834,27 @@ main() {
     done
     
     # Check for root
-    if [[ $EUID -ne 0 ]]; then
+    if [[ "$mode" == "install" && $EUID -ne 0 ]]; then
         error "This script must be run as root"
     fi
     
     log "Starting CA chain installation for: $domain"
     
+    # Handle info-only mode
+    if [[ "$mode" == "info-only" ]]; then
+        print_chain_info "$domain" "$port" "$proxy_url"
+        exit 0
+    fi
+    
+    # Handle download-only mode
+    if [[ "$mode" == "download-only" ]]; then
+        download_only "$domain" "$port" "$proxy_url"
+        exit 0
+    fi
+    
     # Download certificates
     local ca_bundle
-    ca_bundle=$(download_cert_chain "$domain" "$port")
+    ca_bundle=$(download_cert_chain "$domain" "$port" "$proxy_url")
     ca_bundle="${CERTS_DIR}/${ca_bundle}"
     
     # Detect installations
