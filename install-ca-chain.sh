@@ -1392,7 +1392,12 @@ detect_python_venvs() {
     local venv_found=0
     
     # Search /home for venvs (limit depth to avoid scanning too deep)
-    while IFS= read -r venv_path; do
+    while IFS= read -r pyvenv_cfg; do
+        [[ -z "$pyvenv_cfg" ]] && continue
+        
+        local venv_path
+        venv_path=$(dirname "$pyvenv_cfg")
+        
         ((venv_found++))
         log "Checking venv: $venv_path"
         
@@ -1422,7 +1427,7 @@ detect_python_venvs() {
         else
             log "  Venv has no certifi installed (skipping)"
         fi
-    done < <(find /home -maxdepth 5 -type f -name "pyvenv.cfg" 2>/dev/null | xargs -I {} dirname {})
+    done < <(find /home -maxdepth 5 -type f -name "pyvenv.cfg" 2>/dev/null)
     
     if [[ $venv_found -eq 0 ]]; then
         log "No Python virtual environments found in /home"
