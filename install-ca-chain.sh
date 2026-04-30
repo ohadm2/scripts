@@ -1383,6 +1383,44 @@ detect_python_certifi() {
     done
 }
 
+
+detect_python_venvs() {
+    log "Detecting Python virtual environments in /home..."
+    
+    # Find venvs by looking for pyvenv.cfg
+    local venv_count=0
+    
+    # Search /home for venvs (limit depth to avoid scanning too deep)
+    while IFS= read -r venv_path; do
+        # Get the venv's python executable
+        local venv_python="${venv_path}/bin/python"
+        local venv_python3="${venv_path}/bin/python3"
+        
+        # Try python3 first, then python
+        local python_exe=""
+        if [[ -x "$venv_python3" ]]; then
+            python_exe="$venv_python3"
+        elif [[ -x "$venv_python" ]]; then
+            python_exe="$venv_python"
+        else
+            continue
+        fi
+        
+        # Get certifi path for this venv
+        local venv_certifi
+        venv_certifi=$("$python_exe" -c "import certifi; print(certifi.where())" 2>/dev/null || true)
+        
+        if [[ -n "$venv_certifi" && -f "$venv_certifi" ]]; then
+            PYTHON_PATHS+=("$venv_certifi")
+            ((venv_count++))
+            log "Found venv certifi: $venv_certifi (venv: $venv_path)"
+        fi
+    done < <(find /home -maxdepth 5 -type f -name "pyvenv.cfg" 2>/dev/null | xargs -I {} dirname {})
+    
+    if [[ $venv_count -gt 0 ]]; then
+        log "Found $venv_count Python virtual environment(s)"
+    fi
+}
 detect_ruby_certs() {
     log "Detecting Ruby SSL cert locations..."
     
@@ -1946,6 +1984,7 @@ main() {
     
     # Detect installations
     [[ "$skip_python" == false ]] && detect_python_certifi
+    [[ "$skip_venv" == false ]] && detect_python_venvs
     [[ "$skip_ruby" == false ]] && detect_ruby_certs
     [[ "$skip_node" == false ]] && detect_node_ca
     [[ "$skip_java" == false ]] && detect_java_cacerts
