@@ -1910,6 +1910,10 @@ main() {
                 skip_python=true
                 shift
                 ;;
+            --skip-venv)
+                skip_venv=true
+                shift
+                ;;
             --skip-ruby)
                 skip_ruby=true
                 shift
