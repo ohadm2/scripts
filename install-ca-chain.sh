@@ -1425,7 +1425,7 @@ detect_python_venvs() {
             continue
         fi
         
-        # Try to get certifi path from venv's site-packages
+        # Try to get certifi paths from venv's site-packages
         # This ensures pip install commands from the venv will work
         local found_any=false
         
@@ -1440,14 +1440,36 @@ detect_python_venvs() {
         # Check for pip's vendored certifi (used by pip install)
         local pip_certifi
         pip_certifi=$("$python_exe" -c "import pip._vendor.certifi as c; print(c.where())" 2>/dev/null || true)
-        if [[ -n "$pip_certifi" && -f "$pip_certifi" && "$pip_certifi" == "$venv_path"* ]]; then
-            # Avoid duplicates
-            if [[ "$pip_certifi" != "$venv_certifi" ]]; then
-                PYTHON_PATHS+=("$pip_certifi")
-                log "  Found pip vendored certifi: $pip_certifi"
-                found_any=true
+        if [[ -n "$pip_certifi" && -f "$pip_certifi" ]]; then
+            if [[ "$pip_certifi" == "$venv_path"* ]]; then
+                # Avoid duplicates
+                if [[ "$pip_certifi" != "$venv_certifi" ]]; then
+                    PYTHON_PATHS+=("$pip_certifi")
+                    log "  Found pip vendored certifi: $pip_certifi"
+                    found_any=true
+                fi
             fi
         fi
+        
+        # Also check for the actual file location in pip's vendor directory
+        local pip_vendor_cert="${venv_path}/lib/python"*"/site-packages/pip/_vendor/certifi/cacert.pem"
+        for cert_path in $pip_vendor_cert; do
+            if [[ -f "$cert_path" ]]; then
+                # Check if not already added
+                local already_added=false
+                for added_path in "${PYTHON_PATHS[@]}"; do
+                    if [[ "$added_path" == "$cert_path" ]]; then
+                        already_added=true
+                        break
+                    fi
+                done
+                if [[ "$already_added" == false ]]; then
+                    PYTHON_PATHS+=("$cert_path")
+                    log "  Found pip vendored certifi (direct): $cert_path"
+                    found_any=true
+                fi
+            fi
+        done
         
         if [[ "$found_any" == true ]]; then
             venv_count=$((venv_count + 1))
@@ -1696,6 +1718,10 @@ install_php_ca() {
     
     # Install to detected PHP cacerts
     for cacert in "${PHP_CACERTS[@]}"; do
+        # Skip if this is the ca_bundle itself (avoid appending to itself)
+        if [[ "$cacert" == "$ca_bundle" ]]; then
+            continue
+        fi
         if [[ -f "$cacert" ]]; then
             backup_file "$cacert"
             cat "$ca_bundle" >> "$cacert"
