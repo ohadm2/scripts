@@ -1329,10 +1329,6 @@ download_cert_chain() {
     
     log "Downloading certificate chain from ${domain}:${port}..."
     
-    if [[ -n "$proxy_url" ]]; then
-        log "Using proxy: $proxy_url"
-    fi
-    
     mkdir -p "$CERTS_DIR"
     cd "$CERTS_DIR"
     
@@ -1341,10 +1337,11 @@ download_cert_chain() {
     local openssl_proxy_args=()
     
     if [[ -n "$proxy_url" ]]; then
-        openssl_proxy_args=(-proxy "$proxy_url")
+        log "Using proxy: $proxy_url"
+        openssl_proxy_args=(-proxy "$(echo "$proxy_url" | sed 's|^https\?://||')")
     fi
     
-    certs=$(openssl s_client -showcerts -verify 5 "${openssl_proxy_args[@]}" -connect "${domain}:${port}" 2>/dev/null </dev/null \
+    certs=$(openssl s_client -showcerts -verify 5 -connect "${domain}:${port}" "${openssl_proxy_args[@]}" 2>/dev/null </dev/null \
         | sed -n '/-----BEGIN CERTIFICATE-----/,/-----END CERTIFICATE-----/p')
     
     if [[ -z "$certs" ]]; then
@@ -1997,6 +1994,61 @@ configure_docker() {
     log "Copied to: ${docker_certs_dir}/ca.crt"
 }
 
+print_chain_info() {
+    local domain="$1"
+    local port="${2:-443}"
+    local proxy_url="${3:-}"
+    
+    log "Fetching certificate chain info from ${domain}:${port}..."
+    
+    local openssl_proxy_args=()
+    if [[ -n "$proxy_url" ]]; then
+        log "Using proxy: $proxy_url"
+        openssl_proxy_args=(-proxy "$(echo "$proxy_url" | sed 's|^https\?://||')")
+    fi
+    
+    local certs
+    certs=$(openssl s_client -showcerts -verify 5 -connect "${domain}:${port}" "${openssl_proxy_args[@]}" 2>/dev/null </dev/null \
+        | sed -n '/-----BEGIN CERTIFICATE-----/,/-----END CERTIFICATE-----/p')
+    
+    if [[ -z "$certs" ]]; then
+        error "Failed to download certificates from ${domain}:${port}"
+    fi
+    
+    local cert_num=1
+    local current_cert=""
+    local in_cert=false
+    
+    while IFS= read -r line; do
+        if [[ "$line" == "-----BEGIN CERTIFICATE-----" ]]; then
+            in_cert=true
+            current_cert="$line"
+        elif [[ "$line" == "-----END CERTIFICATE-----" ]]; then
+            current_cert+=$'\n'"$line"
+            echo "=== Certificate $cert_num ==="
+            echo "$current_cert" | openssl x509 -noout -subject -issuer -dates -fingerprint 2>/dev/null
+            echo ""
+            cert_num=$((cert_num + 1))
+            in_cert=false
+            current_cert=""
+        elif [[ "$in_cert" == true ]]; then
+            current_cert+=$'\n'"$line"
+        fi
+    done <<< "$certs"
+}
+
+download_only() {
+    local domain="$1"
+    local port="${2:-443}"
+    local proxy_url="${3:-}"
+    
+    local ca_bundle
+    ca_bundle=$(download_cert_chain "$domain" "$port" "$proxy_url")
+    
+    log "CA chain downloaded to: ${CERTS_DIR}/${ca_bundle}"
+    cat "${CERTS_DIR}/${ca_bundle}"
+}
+
 main() {
     local domain="$DEFAULT_DOMAIN"
     local port=443
@@ -2130,30 +2182,22 @@ main() {
     
     log "Starting CA chain installation for: $domain"
     
+    # Handle info-only mode
+    if [[ "$mode" == "info-only" ]]; then
+        print_chain_info "$domain" "$port" "$proxy_url"
+        exit 0
+    fi
+    
+    # Handle download-only mode
+    if [[ "$mode" == "download-only" ]]; then
+        download_only "$domain" "$port" "$proxy_url"
+        exit 0
+    fi
+    
     # Download certificates
     local ca_bundle
     ca_bundle=$(download_cert_chain "$domain" "$port" "$proxy_url")
     ca_bundle="${CERTS_DIR}/${ca_bundle}"
-    
-    # Handle special modes
-    if [[ "$mode" == "info-only" ]]; then
-        log "Certificate chain information:"
-        openssl storeutl -noout -text -certs "$ca_bundle" 2>/dev/null || \
-        csplit -s -f "${CERTS_DIR}/cert-" "$ca_bundle" '/-----BEGIN CERTIFICATE-----/' '{*}' && \
-        for cert_file in "${CERTS_DIR}"/cert-*; do
-            [[ -f "$cert_file" ]] || continue
-            echo "---"
-            openssl x509 -in "$cert_file" -noout -subject -issuer -dates 2>/dev/null
-            rm -f "$cert_file"
-        done
-        exit 0
-    fi
-    
-    if [[ "$mode" == "download-only" ]]; then
-        log "CA chain downloaded to: $ca_bundle"
-        cat "$ca_bundle"
-        exit 0
-    fi
     
     # Detect installations
     [[ "$skip_python" == false ]] && detect_python_certifi
