@@ -1389,9 +1389,13 @@ detect_python_venvs() {
     
     # Find venvs by looking for pyvenv.cfg
     local venv_count=0
+    local venv_found=0
     
     # Search /home for venvs (limit depth to avoid scanning too deep)
     while IFS= read -r venv_path; do
+        ((venv_found++))
+        log "Checking venv: $venv_path"
+        
         # Get the venv's python executable
         local venv_python="${venv_path}/bin/python"
         local venv_python3="${venv_path}/bin/python3"
@@ -1403,6 +1407,7 @@ detect_python_venvs() {
         elif [[ -x "$venv_python" ]]; then
             python_exe="$venv_python"
         else
+            log "  No executable python found in venv"
             continue
         fi
         
@@ -1413,12 +1418,18 @@ detect_python_venvs() {
         if [[ -n "$venv_certifi" && -f "$venv_certifi" ]]; then
             PYTHON_PATHS+=("$venv_certifi")
             ((venv_count++))
-            log "Found venv certifi: $venv_certifi (venv: $venv_path)"
+            log "Found venv certifi: $venv_certifi"
+        else
+            log "  Venv has no certifi installed (skipping)"
         fi
     done < <(find /home -maxdepth 5 -type f -name "pyvenv.cfg" 2>/dev/null | xargs -I {} dirname {})
     
-    if [[ $venv_count -gt 0 ]]; then
-        log "Found $venv_count Python virtual environment(s)"
+    if [[ $venv_found -eq 0 ]]; then
+        log "No Python virtual environments found in /home"
+    elif [[ $venv_count -gt 0 ]]; then
+        log "Found $venv_count Python virtual environment(s) with certifi"
+    else
+        log "Found $venv_found venv(s) but none have certifi installed"
     fi
 }
 detect_ruby_certs() {
