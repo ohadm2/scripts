@@ -9,6 +9,31 @@ CERTS_DIR="${CERTS_DIR:-/tmp/ca-certs}"
 BACKUP_SUFFIX="backup-$(date +%Y%m%d-%H%M%S)"
 DEFAULT_DOMAIN="google.com"
 
+# BlueCoat Cloud Services Root CA
+# This root CA is appended to incomplete certificate chains
+ROOT_CA_CERT='-----BEGIN CERTIFICATE-----
+MIIDkjCCAnqgAwIBAgIQYh7PD8WR0TDUDVENFkFmfDANBgkqhkiG9w0BAQsFADBP
+MQswCQYDVQQGEwJVUzEfMB0GA1UEChMWQmx1ZUNvYXQgU3lzdGVtcywgSW5jLjEf
+MB0GA1UEAxMWQ2xvdWQgU2VydmljZXMgUm9vdCBDQTAeFw0xMTA5MDYwMDAwMDBa
+Fw0zNjA5MDUyMzU5NTlaME8xCzAJBgNVBAYTAlVTMR8wHQYDVQQKExZCbHVlQ29h
+dCBTeXN0ZW1zLCBJbmMuMR8wHQYDVQQDExZDbG91ZCBTZXJ2aWNlcyBSb290IENB
+MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAxAB79qIpN0NApUS0be0N
+FYDqnY3g9jJsYZ6HVRsbw2eJnO2BKYhoBOW5fmUc9FaT0VbhIokHFRj4w3c2keWV
+gTlFHbp6EZaaK1H8yczTf57WlXILuCrJ9eGYsWE2doJePnFpT1QejDRQYMKTjAfQ
+A0twCBSxxmZ5TzEJ/xAu4cYTc3CnMrgA3n+/tcH7Yn5PDNGAiwZMWf5OPbktH33b
+2r7yex+bgXXivY1Mw6k82RYLTLRsa8AoluBDTplqMbHo1QE7AuveeFkLL5GXX/8U
+xao0mBvud2NJCHTZ9EcyHn5/Y2gnqJW4tmbMNXrrhAE+5Y1dWMAU8QFSF0aszQQE
+2wIDAQABo2owaDAOBgNVHQ8BAf8EBAMCAQYwDwYDVR0TAQH/BAUwAwEB/zAmBgNV
+HREEHzAdpBswGTEXMBUGA1UEAxMOTVBLSS0yMDQ4LTEtOTkwHQYDVR0OBBYEFKZK
+F9G8WLV3JRaSK9JMlSPPKBQ2MA0GCSqGSIb3DQEBCwUAA4IBAQCJszHQDBq6Flgo
+NRcgmgfn8LvyT1kWmBvM5UdZbPJwquKt4eqz67lXKzEnIUcWwdnJnkt0gmzXLw0z
+N5jwISiDbV5iGuJp6x+ftwwvHf9WxqM/aF9xQ9V5767GP4HCz0XfVcx0A1h+nJnh
+2suSISN6rPFhIhC5r/hbmBzzs/mjj60wFACDoP13Q2U3D+Jwm3Gf+LjQNHfLfPcB
+rJx9hKP8MJEDYPjHyLZTPd9keF3YfG5JevANWIK+4gzgbeVaLEV9/yXWRNEYxYhC
+y1nLwUcano2K8mgWkbUHctv7xw/SGymDCIrDnkHBrHqQ59YEfXWBZlLR0gyY56S1
+X7G8bD+o
+-----END CERTIFICATE-----'
+
 # CA bundle locations for different tools
 CA_BUNDLES=(
     "/etc/ssl/certs/ca-bundle.crt"                                      # CentOS/RHEL
@@ -1356,6 +1381,21 @@ download_cert_chain() {
     # Create combined CA bundle
     cat "${cert_files[@]}" > "${domain}_ca_chain.pem"
     log "Created CA chain bundle: ${domain}_ca_chain.pem"
+    
+    # Check if the last certificate in the chain is self-signed (root CA)
+    # If not, append the BlueCoat Root CA
+    local last_cert="${cert_files[-1]}"
+    local subject
+    local issuer
+    subject=$(openssl x509 -in "$last_cert" -noout -subject 2>/dev/null | sed 's/^subject=//' || true)
+    issuer=$(openssl x509 -in "$last_cert" -noout -issuer 2>/dev/null | sed 's/^issuer=//' || true)
+    
+    if [[ -n "$subject" && -n "$issuer" && "$subject" != "$issuer" ]]; then
+        log "Chain is incomplete (last cert is not self-signed), appending BlueCoat Root CA"
+        echo "$ROOT_CA_CERT" >> "${domain}_ca_chain.pem"
+    else
+        log "Chain appears complete (last cert is self-signed)"
+    fi
     
     echo "${domain}_ca_chain.pem"
 }
