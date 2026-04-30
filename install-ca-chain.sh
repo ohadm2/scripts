@@ -1425,15 +1425,34 @@ detect_python_venvs() {
             continue
         fi
         
-        # Get certifi path for this venv
-        venv_certifi=$("$python_exe" -c "import certifi; print(certifi.where())" 2>/dev/null || true)
+        # Try to get certifi path from venv's site-packages
+        # This ensures pip install commands from the venv will work
+        local found_any=false
         
-        if [[ -n "$venv_certifi" && -f "$venv_certifi" ]]; then
+        # Check for regular certifi package
+        venv_certifi=$("$python_exe" -c "import certifi; print(certifi.where())" 2>/dev/null || true)
+        if [[ -n "$venv_certifi" && -f "$venv_certifi" && "$venv_certifi" == "$venv_path"* ]]; then
             PYTHON_PATHS+=("$venv_certifi")
+            log "  Found certifi: $venv_certifi"
+            found_any=true
+        fi
+        
+        # Check for pip's vendored certifi (used by pip install)
+        local pip_certifi
+        pip_certifi=$("$python_exe" -c "import pip._vendor.certifi as c; print(c.where())" 2>/dev/null || true)
+        if [[ -n "$pip_certifi" && -f "$pip_certifi" && "$pip_certifi" == "$venv_path"* ]]; then
+            # Avoid duplicates
+            if [[ "$pip_certifi" != "$venv_certifi" ]]; then
+                PYTHON_PATHS+=("$pip_certifi")
+                log "  Found pip vendored certifi: $pip_certifi"
+                found_any=true
+            fi
+        fi
+        
+        if [[ "$found_any" == true ]]; then
             venv_count=$((venv_count + 1))
-            log "Found venv certifi: $venv_certifi"
         else
-            log "  Venv has no certifi installed (skipping)"
+            log "  No venv-specific certifi found (uses system certifi)"
         fi
     done <<< "$find_results"
     
@@ -1823,7 +1842,7 @@ EOF
     log "Created: $profile_file"
 }
 
-install_ruby_ca() {
+install_java_ca() {
     local ca_bundle="$1"
     
     if ! command -v keytool &>/dev/null; then
