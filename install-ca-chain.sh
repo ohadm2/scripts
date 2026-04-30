@@ -2013,7 +2013,7 @@ main() {
     
     # Detect installations
     [[ "$skip_python" == false ]] && detect_python_certifi
-    [[ "$skip_venv" == false ]] && detect_python_venvs
+    [[ "$skip_venv" == false ]] && { detect_python_venvs || true; }
     [[ "$skip_ruby" == false ]] && detect_ruby_certs
     [[ "$skip_node" == false ]] && detect_node_ca
     [[ "$skip_java" == false ]] && detect_java_cacerts
