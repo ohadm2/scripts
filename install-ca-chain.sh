@@ -1391,25 +1391,26 @@ detect_python_venvs() {
     local venv_count=0
     local venv_found=0
     
-    # Search /home for venvs
+    # Search /home for venvs - with error handling
+    local find_results
+    find_results=$(find /home -maxdepth 5 -type f -name "pyvenv.cfg" 2>/dev/null || true)
+    
+    if [[ -z "$find_results" ]]; then
+        log "No Python virtual environments found in /home"
+        return 0
+    fi
+    
     local pyvenv_cfg
     local venv_path
     local python_exe
     local venv_certifi
     
-    # Store find results to avoid subshell issue with pipe
-    local find_results
-    find_results=$(find /home -maxdepth 5 -type f -name "pyvenv.cfg" 2>/dev/null)
-    
-    if [[ -z "$find_results" ]]; then
-        log "No Python virtual environments found in /home"
-        return
-    fi
-    
     while IFS= read -r pyvenv_cfg; do
         [[ -z "$pyvenv_cfg" ]] && continue
         
-        venv_path=$(dirname "$pyvenv_cfg")
+        venv_path=$(dirname "$pyvenv_cfg" 2>/dev/null || echo "")
+        [[ -z "$venv_path" ]] && continue
+        
         ((venv_found++))
         log "Checking venv: $venv_path"
         
@@ -1441,6 +1442,8 @@ detect_python_venvs() {
     elif [[ $venv_found -gt 0 ]]; then
         log "Found $venv_found venv(s) but none have certifi installed"
     fi
+    
+    return 0
 }
 detect_ruby_certs() {
     log "Detecting Ruby SSL cert locations..."
