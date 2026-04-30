@@ -95,6 +95,10 @@ Options:
     -h, --help      Show this help message
     -d, --dir DIR   Directory to store certificates (default: $CERTS_DIR)
     -p, --port PORT Port to connect to (default: 443)
+    --proxy [URL]   Route the certificate download through a proxy.
+                    If no URL is given, uses HTTPS_PROXY or https_proxy env var.
+    --download-only Download the CA chain as a single base64 PEM file and exit
+    --info-only     Print certificate chain info (subject, issuer, dates) and exit
     --skip-system   Skip system CA bundle installation
     --skip-python   Skip Python certifi installation
     --skip-venv     Skip Python virtual environment detection
@@ -122,6 +126,10 @@ Examples:
     $SCRIPT_NAME gitlab.example.com
     $SCRIPT_NAME --dir /opt/certs google.com
     $SCRIPT_NAME --skip-python --skip-node internal.corp.com
+    $SCRIPT_NAME --proxy http://proxy:8080 google.com
+    $SCRIPT_NAME --proxy google.com          # uses HTTPS_PROXY env var
+    $SCRIPT_NAME --download-only google.com
+    $SCRIPT_NAME --info-only google.com
     $SCRIPT_NAME --cloud-func python3.12 > proxy_cert_setup.py
     $SCRIPT_NAME --cloud-func nodejs > proxyCertSetup.js
     $SCRIPT_NAME --cloud-func go     > proxycerts.go
@@ -1317,15 +1325,26 @@ backup_file() {
 download_cert_chain() {
     local domain="$1"
     local port="${2:-443}"
+    local proxy_url="${3:-}"
     
     log "Downloading certificate chain from ${domain}:${port}..."
+    
+    if [[ -n "$proxy_url" ]]; then
+        log "Using proxy: $proxy_url"
+    fi
     
     mkdir -p "$CERTS_DIR"
     cd "$CERTS_DIR"
     
     # Get certificate chain
     local certs
-    certs=$(openssl s_client -showcerts -verify 5 -connect "${domain}:${port}" 2>/dev/null </dev/null \
+    local openssl_proxy_args=()
+    
+    if [[ -n "$proxy_url" ]]; then
+        openssl_proxy_args=(-proxy "$proxy_url")
+    fi
+    
+    certs=$(openssl s_client -showcerts -verify 5 "${openssl_proxy_args[@]}" -connect "${domain}:${port}" 2>/dev/null </dev/null \
         | sed -n '/-----BEGIN CERTIFICATE-----/,/-----END CERTIFICATE-----/p')
     
     if [[ -z "$certs" ]]; then
@@ -1981,6 +2000,8 @@ configure_docker() {
 main() {
     local domain="$DEFAULT_DOMAIN"
     local port=443
+    local proxy_url=""
+    local mode="install"  # install | download-only | info-only
     local skip_system=false
     local skip_python=false
     local skip_venv=false
@@ -2010,6 +2031,24 @@ main() {
             -p|--port)
                 port="$2"
                 shift 2
+                ;;
+            --proxy)
+                if [[ -n "${2:-}" && "${2:0:1}" != "-" ]]; then
+                    proxy_url="$2"
+                    shift 2
+                else
+                    proxy_url="${HTTPS_PROXY:-${https_proxy:-}}"
+                    [[ -z "$proxy_url" ]] && error "--proxy: no URL given and HTTPS_PROXY / https_proxy not set"
+                    shift
+                fi
+                ;;
+            --download-only)
+                mode="download-only"
+                shift
+                ;;
+            --info-only)
+                mode="info-only"
+                shift
                 ;;
             --skip-system)
                 skip_system=true
@@ -2084,8 +2123,8 @@ main() {
         esac
     done
     
-    # Check for root
-    if [[ $EUID -ne 0 ]]; then
+    # Check for root (not needed for info-only or download-only modes)
+    if [[ "$mode" == "install" && $EUID -ne 0 ]]; then
         error "This script must be run as root"
     fi
     
@@ -2093,8 +2132,28 @@ main() {
     
     # Download certificates
     local ca_bundle
-    ca_bundle=$(download_cert_chain "$domain" "$port")
+    ca_bundle=$(download_cert_chain "$domain" "$port" "$proxy_url")
     ca_bundle="${CERTS_DIR}/${ca_bundle}"
+    
+    # Handle special modes
+    if [[ "$mode" == "info-only" ]]; then
+        log "Certificate chain information:"
+        openssl storeutl -noout -text -certs "$ca_bundle" 2>/dev/null || \
+        csplit -s -f "${CERTS_DIR}/cert-" "$ca_bundle" '/-----BEGIN CERTIFICATE-----/' '{*}' && \
+        for cert_file in "${CERTS_DIR}"/cert-*; do
+            [[ -f "$cert_file" ]] || continue
+            echo "---"
+            openssl x509 -in "$cert_file" -noout -subject -issuer -dates 2>/dev/null
+            rm -f "$cert_file"
+        done
+        exit 0
+    fi
+    
+    if [[ "$mode" == "download-only" ]]; then
+        log "CA chain downloaded to: $ca_bundle"
+        cat "$ca_bundle"
+        exit 0
+    fi
     
     # Detect installations
     [[ "$skip_python" == false ]] && detect_python_certifi
