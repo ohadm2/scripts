@@ -1391,33 +1391,40 @@ detect_python_venvs() {
     local venv_count=0
     local venv_found=0
     
-    # Search /home for venvs (limit depth to avoid scanning too deep)
+    # Search /home for venvs
+    local pyvenv_cfg
+    local venv_path
+    local python_exe
+    local venv_certifi
+    
+    # Store find results to avoid subshell issue with pipe
+    local find_results
+    find_results=$(find /home -maxdepth 5 -type f -name "pyvenv.cfg" 2>/dev/null)
+    
+    if [[ -z "$find_results" ]]; then
+        log "No Python virtual environments found in /home"
+        return
+    fi
+    
     while IFS= read -r pyvenv_cfg; do
         [[ -z "$pyvenv_cfg" ]] && continue
         
-        local venv_path
         venv_path=$(dirname "$pyvenv_cfg")
-        
         ((venv_found++))
         log "Checking venv: $venv_path"
         
         # Get the venv's python executable
-        local venv_python="${venv_path}/bin/python"
-        local venv_python3="${venv_path}/bin/python3"
-        
-        # Try python3 first, then python
-        local python_exe=""
-        if [[ -x "$venv_python3" ]]; then
-            python_exe="$venv_python3"
-        elif [[ -x "$venv_python" ]]; then
-            python_exe="$venv_python"
+        python_exe=""
+        if [[ -x "${venv_path}/bin/python3" ]]; then
+            python_exe="${venv_path}/bin/python3"
+        elif [[ -x "${venv_path}/bin/python" ]]; then
+            python_exe="${venv_path}/bin/python"
         else
             log "  No executable python found in venv"
             continue
         fi
         
         # Get certifi path for this venv
-        local venv_certifi
         venv_certifi=$("$python_exe" -c "import certifi; print(certifi.where())" 2>/dev/null || true)
         
         if [[ -n "$venv_certifi" && -f "$venv_certifi" ]]; then
@@ -1427,13 +1434,11 @@ detect_python_venvs() {
         else
             log "  Venv has no certifi installed (skipping)"
         fi
-    done < <(find /home -maxdepth 5 -type f -name "pyvenv.cfg" 2>/dev/null)
+    done <<< "$find_results"
     
-    if [[ $venv_found -eq 0 ]]; then
-        log "No Python virtual environments found in /home"
-    elif [[ $venv_count -gt 0 ]]; then
+    if [[ $venv_count -gt 0 ]]; then
         log "Found $venv_count Python virtual environment(s) with certifi"
-    else
+    elif [[ $venv_found -gt 0 ]]; then
         log "Found $venv_found venv(s) but none have certifi installed"
     fi
 }
