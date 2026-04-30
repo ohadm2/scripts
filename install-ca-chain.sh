@@ -1411,7 +1411,7 @@ detect_python_venvs() {
         venv_path=$(dirname "$pyvenv_cfg" 2>/dev/null || echo "")
         [[ -z "$venv_path" ]] && continue
         
-        ((venv_found++))
+        venv_found=$((venv_found + 1))
         log "Checking venv: $venv_path"
         
         # Get the venv's python executable
@@ -1430,7 +1430,7 @@ detect_python_venvs() {
         
         if [[ -n "$venv_certifi" && -f "$venv_certifi" ]]; then
             PYTHON_PATHS+=("$venv_certifi")
-            ((venv_count++))
+            venv_count=$((venv_count + 1))
             log "Found venv certifi: $venv_certifi"
         else
             log "  Venv has no certifi installed (skipping)"
