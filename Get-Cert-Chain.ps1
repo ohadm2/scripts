@@ -12,7 +12,7 @@
     Directory to store certificate files (default: current directory).
 
 .PARAMETER Proxy
-    Route the connection through an HTTP proxy (e.g., http://proxy:8080).
+    Route the connection through an HTTP proxy (e.g., http://proxy:8080 or proxy:8080).
 
 .EXAMPLE
     PS> .\Get-Cert-Chain.ps1 -TargetHost example.com
@@ -35,87 +35,31 @@ param (
     [string]$Proxy
 )
 
-function Get-RemoteCertChain {
-    param(
-        [string]$Hostname,
-        [int]$PortNumber,
-        [string]$ProxyUrl
-    )
-
-    # Script-scope variable to capture certs from the callback
-    $script:capturedCerts = @()
-
-    try {
-        if ($ProxyUrl) {
-            $proxyUri = [System.Uri]::new($ProxyUrl)
-            $tcp = New-Object System.Net.Sockets.TcpClient
-            $tcp.Connect($proxyUri.Host, $proxyUri.Port)
-            $proxyStream = $tcp.GetStream()
-            $connectRequest = [System.Text.Encoding]::ASCII.GetBytes("CONNECT ${Hostname}:${PortNumber} HTTP/1.1`r`nHost: ${Hostname}:${PortNumber}`r`n`r`n")
-            $proxyStream.Write($connectRequest, 0, $connectRequest.Length)
-            $buffer = New-Object byte[] 4096
-            $bytesRead = $proxyStream.Read($buffer, 0, $buffer.Length)
-            $response = [System.Text.Encoding]::ASCII.GetString($buffer, 0, $bytesRead)
-            if ($response -notmatch "200") { throw "Proxy CONNECT failed: $response" }
-            $stream = $proxyStream
-        } else {
-            $tcp = New-Object System.Net.Sockets.TcpClient
-            $tcp.Connect($Hostname, $PortNumber)
-            $stream = $tcp.GetStream()
-        }
-
-        # Capture the full chain inside the callback
-        $certCallback = {
-            param($sender, $cert, $chain, $sslPolicyErrors)
-            
-            foreach ($element in $chain.ChainElements) {
-                # Clone each certificate so it persists after callback
-                $script:capturedCerts += New-Object System.Security.Cryptography.X509Certificates.X509Certificate2($element.Certificate)
-            }
-            return $true
-        }
-
-        $sslStream = New-Object System.Net.Security.SslStream($stream, $false, $certCallback)
-        $sslStream.AuthenticateAsClient($Hostname)
-
-        $sslStream.Close()
-        $tcp.Close()
-
-        return $script:capturedCerts
-    }
-    catch {
-        Write-Error "Failed to retrieve certificate chain from ${Hostname}:${PortNumber} - $_"
-        return $null
-    }
-}
-
-function Export-CertToFile {
-    param(
-        [System.Security.Cryptography.X509Certificates.X509Certificate2]$Cert,
-        [string]$FileName
-    )
-
-    $pem = "-----BEGIN CERTIFICATE-----`n"
-    $base64 = [System.Convert]::ToBase64String($Cert.RawData, 'InsertLineBreaks')
-    $pem += $base64 + "`n-----END CERTIFICATE-----`n"
-
-    $pem | Out-File -FilePath $FileName -Encoding ascii
-}
-
-function Print-CertInfo {
-    param (
-        [System.Security.Cryptography.X509Certificates.X509Certificate2]$Cert,
-        [int]$Index
-    )
-
-    Write-Host "Certificate #$Index"
-    Write-Host "  Subject     : $($Cert.Subject)"
-    Write-Host "  Issuer      : $($Cert.Issuer)"
-    Write-Host "  Valid From  : $($Cert.NotBefore)"
-    Write-Host "  Valid Until : $($Cert.NotAfter)"
-    Write-Host "  Thumbprint  : $($Cert.Thumbprint)"
-    Write-Host ""
-}
+# BlueCoat Cloud Services Root CA
+$ROOT_CA_CERT = @"
+-----BEGIN CERTIFICATE-----
+MIIDkjCCAnqgAwIBAgIQYh7PD8WR0TDUDVENFkFmfDANBgkqhkiG9w0BAQsFADBP
+MQswCQYDVQQGEwJVUzEfMB0GA1UEChMWQmx1ZUNvYXQgU3lzdGVtcywgSW5jLjEf
+MB0GA1UEAxMWQ2xvdWQgU2VydmljZXMgUm9vdCBDQTAeFw0xMTA5MDYwMDAwMDBa
+Fw0zNjA5MDUyMzU5NTlaME8xCzAJBgNVBAYTAlVTMR8wHQYDVQQKExZCbHVlQ29h
+dCBTeXN0ZW1zLCBJbmMuMR8wHQYDVQQDExZDbG91ZCBTZXJ2aWNlcyBSb290IENB
+MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAxAB79qIpN0NApUS0be0N
+FYDqnY3g9jJsYZ6HVRsbw2eJnO2BKYhoBOW5fmUc9FaT0VbhIokHFRj4w3c2keWV
+gTlFHbp6EZaaK1H8yczTf57WlXILuCrJ9eGYsWE2doJePnFpT1QejDRQYMKTjAfQ
+A0twCBSxxmZ5TzEJ/xAu4cYTc3CnMrgA3n+/tcH7Yn5PDNGAiwZMWf5OPbktH33b
+2r7yex+bgXXivY1Mw6k82RYLTLRsa8AoluBDTplqMbHo1QE7AuveeFkLL5GXX/8U
+xao0mBvud2NJCHTZ9EcyHn5/Y2gnqJW4tmbMNXrrhAE+5Y1dWMAU8QFSF0aszQQE
+2wIDAQABo2owaDAOBgNVHQ8BAf8EBAMCAQYwDwYDVR0TAQH/BAUwAwEB/zAmBgNV
+HREEHzAdpBswGTEXMBUGA1UEAxMOTVBLSS0yMDQ4LTEtOTkwHQYDVR0OBBYEFKZK
+F9G8WLV3JRaSK9JMlSPPKBQ2MA0GCSqGSIb3DQEBCwUAA4IBAQCJszHQDBq6Flgo
+NRcgmgfn8LvyT1kWmBvM5UdZbPJwquKt4eqz67lXKzEnIUcWwdnJnkt0gmzXLw0z
+N5jwISiDbV5iGuJp6x+ftwwvHf9WxqM/aF9xQ9V5767GP4HCz0XfVcx0A1h+nJnh
+2suSISN6rPFhIhC5r/hbmBzzs/mjj60wFACDoP13Q2U3D+Jwm3Gf+LjQNHfLfPcB
+rJx9hKP8MJEDYPjHyLZTPd9keF3YfG5JevANWIK+4gzgbeVaLEV9/yXWRNEYxYhC
+y1nLwUcano2K8mgWkbUHctv7xw/SGymDCIrDnkHBrHqQ59YEfXWBZlLR0gyY56S1
+X7G8bD+o
+-----END CERTIFICATE-----
+"@
 
 # Main script logic
 
@@ -126,24 +70,92 @@ if (-not (Test-Path $OutputDir)) {
 Write-Host "Getting certificate chain from ${TargetHost}:${Port} ..." -ForegroundColor Cyan
 if ($Proxy) { Write-Host "Using proxy: $Proxy" -ForegroundColor DarkCyan }
 Write-Host "Saving certificates to: $OutputDir" -ForegroundColor DarkCyan
+Write-Host ""
 
-$certs = Get-RemoteCertChain -Hostname $TargetHost -PortNumber $Port -ProxyUrl $Proxy
+# Script-scope variable to capture certs from the callback
+$script:capturedCerts = @()
 
-if (-not $certs) {
-    Write-Error "No certificates retrieved."
+try {
+    if ($Proxy) {
+        if ($Proxy -notmatch '^https?://') { $Proxy = "http://$Proxy" }
+        $proxyUri = [System.Uri]::new($Proxy)
+        $tcp = New-Object System.Net.Sockets.TcpClient
+        $tcp.Connect($proxyUri.Host, $proxyUri.Port)
+        $proxyStream = $tcp.GetStream()
+        $connectRequest = [System.Text.Encoding]::ASCII.GetBytes("CONNECT ${TargetHost}:${Port} HTTP/1.1`r`nHost: ${TargetHost}:${Port}`r`n`r`n")
+        $proxyStream.Write($connectRequest, 0, $connectRequest.Length)
+        $buffer = New-Object byte[] 4096
+        $bytesRead = $proxyStream.Read($buffer, 0, $buffer.Length)
+        $response = [System.Text.Encoding]::ASCII.GetString($buffer, 0, $bytesRead)
+        if ($response -notmatch "200") { throw "Proxy CONNECT failed: $response" }
+        $stream = $proxyStream
+    } else {
+        $tcp = New-Object System.Net.Sockets.TcpClient
+        $tcp.Connect($TargetHost, $Port)
+        $stream = $tcp.GetStream()
+    }
+
+    $certCallback = {
+        param($sender, $cert, $chain, $sslPolicyErrors)
+        foreach ($element in $chain.ChainElements) {
+            $script:capturedCerts += New-Object System.Security.Cryptography.X509Certificates.X509Certificate2($element.Certificate)
+        }
+        return $true
+    }
+
+    $sslStream = New-Object System.Net.Security.SslStream($stream, $false, $certCallback)
+    $sslStream.AuthenticateAsClient($TargetHost)
+    $sslStream.Close()
+    $tcp.Close()
+}
+catch {
+    Write-Error "Failed to retrieve certificate chain from ${TargetHost}:${Port} - $_"
     exit 1
 }
 
-$i = 0
-foreach ($cert in $certs) {
-    Print-CertInfo -Cert $cert -Index $i
-
-    $filePath = Join-Path -Path $OutputDir -ChildPath "${TargetHost}-$i.crt"
-    Export-CertToFile -Cert $cert -FileName $filePath
-
-    Write-Host "Saved certificate #$i to $filePath" -ForegroundColor Green
-    Write-Host
-    
-    $i++
+if ($script:capturedCerts.Count -eq 0) {
+    Write-Error "No certificates captured from chain."
+    exit 1
 }
 
+Write-Host "Captured $($script:capturedCerts.Count) certificates from chain" -ForegroundColor Cyan
+Write-Host ""
+
+# Export all certificates in the chain
+$certFiles = @()
+$certNum = 1
+
+foreach ($cert in $script:capturedCerts) {
+    $certFile = Join-Path $OutputDir "${TargetHost}_${certNum}.pem"
+    $pemCert = "-----BEGIN CERTIFICATE-----`r`n"
+    $pemCert += [Convert]::ToBase64String($cert.RawData, [System.Base64FormattingOptions]::InsertLineBreaks)
+    $pemCert += "`r`n-----END CERTIFICATE-----`r`n"
+    Set-Content -Path $certFile -Value $pemCert -Encoding ASCII
+
+    $certType = if ($certNum -eq 1) { "End/Leaf" } elseif ($cert.Subject -eq $cert.Issuer) { "Root CA" } else { "Intermediate CA" }
+    Write-Host "Certificate $($certNum) [$certType]:" -ForegroundColor Green
+    Write-Host "  Subject : $($cert.Subject)"
+    Write-Host "  Issuer  : $($cert.Issuer)"
+    Write-Host "  Valid   : $($cert.NotBefore) - $($cert.NotAfter)"
+    Write-Host "  File    : $certFile"
+    Write-Host ""
+
+    $certFiles += $certFile
+    $certNum++
+}
+
+# Create combined CA bundle
+$caBundlePath = Join-Path $OutputDir "${TargetHost}_ca_chain.pem"
+$certFiles | ForEach-Object { Get-Content $_ } | Set-Content -Path $caBundlePath -Encoding ASCII
+
+# Check if chain is incomplete and append root CA
+$lastCert = $script:capturedCerts[$script:capturedCerts.Count - 1]
+if ($lastCert.Subject -ne $lastCert.Issuer) {
+    Write-Host "Chain is incomplete (last cert is not self-signed), appending BlueCoat Root CA" -ForegroundColor Yellow
+    Add-Content -Path $caBundlePath -Value $ROOT_CA_CERT -Encoding ASCII
+} else {
+    Write-Host "Chain is complete (last cert is self-signed)" -ForegroundColor Green
+}
+
+Write-Host ""
+Write-Host "CA chain bundle saved to: $caBundlePath" -ForegroundColor Cyan
