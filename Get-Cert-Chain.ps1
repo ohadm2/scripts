@@ -11,11 +11,17 @@
 .PARAMETER OutputDir
     Directory to store certificate files (default: current directory).
 
+.PARAMETER Proxy
+    Route the connection through an HTTP proxy (e.g., http://proxy:8080).
+
 .EXAMPLE
     PS> .\Get-Cert-Chain.ps1 -TargetHost example.com
 
 .EXAMPLE
     PS> .\Get-Cert-Chain.ps1 -TargetHost example.com -OutputDir "C:\certs"
+
+.EXAMPLE
+    PS> .\Get-Cert-Chain.ps1 -TargetHost example.com -Proxy http://proxy:8080
 #>
 
 param (
@@ -24,22 +30,39 @@ param (
 
     [int]$Port = 443,
 
-    [string]$OutputDir = "."
+    [string]$OutputDir = ".",
+
+    [string]$Proxy
 )
 
 function Get-RemoteCertChain {
     param(
         [string]$Hostname,
-        [int]$PortNumber
+        [int]$PortNumber,
+        [string]$ProxyUrl
     )
 
     # Script-scope variable to capture certs from the callback
     $script:capturedCerts = @()
 
     try {
-        $tcp = New-Object System.Net.Sockets.TcpClient
-        $tcp.Connect($Hostname, $PortNumber)
-        $stream = $tcp.GetStream()
+        if ($ProxyUrl) {
+            $proxyUri = [System.Uri]::new($ProxyUrl)
+            $tcp = New-Object System.Net.Sockets.TcpClient
+            $tcp.Connect($proxyUri.Host, $proxyUri.Port)
+            $proxyStream = $tcp.GetStream()
+            $connectRequest = [System.Text.Encoding]::ASCII.GetBytes("CONNECT ${Hostname}:${PortNumber} HTTP/1.1`r`nHost: ${Hostname}:${PortNumber}`r`n`r`n")
+            $proxyStream.Write($connectRequest, 0, $connectRequest.Length)
+            $buffer = New-Object byte[] 4096
+            $bytesRead = $proxyStream.Read($buffer, 0, $buffer.Length)
+            $response = [System.Text.Encoding]::ASCII.GetString($buffer, 0, $bytesRead)
+            if ($response -notmatch "200") { throw "Proxy CONNECT failed: $response" }
+            $stream = $proxyStream
+        } else {
+            $tcp = New-Object System.Net.Sockets.TcpClient
+            $tcp.Connect($Hostname, $PortNumber)
+            $stream = $tcp.GetStream()
+        }
 
         # Capture the full chain inside the callback
         $certCallback = {
@@ -101,9 +124,10 @@ if (-not (Test-Path $OutputDir)) {
 }
 
 Write-Host "Getting certificate chain from ${TargetHost}:${Port} ..." -ForegroundColor Cyan
+if ($Proxy) { Write-Host "Using proxy: $Proxy" -ForegroundColor DarkCyan }
 Write-Host "Saving certificates to: $OutputDir" -ForegroundColor DarkCyan
 
-$certs = Get-RemoteCertChain -Hostname $TargetHost -PortNumber $Port
+$certs = Get-RemoteCertChain -Hostname $TargetHost -PortNumber $Port -ProxyUrl $Proxy
 
 if (-not $certs) {
     Write-Error "No certificates retrieved."
