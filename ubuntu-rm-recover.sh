@@ -15,6 +15,8 @@
 #                       (needs the package system to have survived).
 #   rebuild             debootstrap a fresh base system from the archive (for the
 #                       "package system gone" case). Preserves /home.
+#   shell               Mount + bind + chroot into the target for an interactive
+#                       repair shell; auto-unmounts everything on exit.
 #
 # Usage:
 #   sudo ./ubuntu-rm-recover.sh assess              [--root /dev/XXX]
@@ -22,6 +24,7 @@
 #   sudo ./ubuntu-rm-recover.sh netfix              [--root /dev/XXX]
 #   sudo ./ubuntu-rm-recover.sh reinstall           [--root /dev/XXX] [--yes]
 #   sudo ./ubuntu-rm-recover.sh rebuild             [--root /dev/XXX] [--yes]
+#   sudo ./ubuntu-rm-recover.sh shell               [--root /dev/XXX]
 #
 # Overrides: ROOT_DEV=/dev/XXX  RELEASE_CODENAME=noble  MOUNT_POINT=/mnt/foo
 #
@@ -54,9 +57,9 @@ parse_args() {
   [[ $# -gt 0 ]] || { usage; exit 1; }
   MODE="$1"; shift
   case "$MODE" in
-    assess|salvage|netfix|reinstall|rebuild) ;;
+    assess|salvage|netfix|reinstall|rebuild|shell) ;;
     -h|--help) usage; exit 0 ;;
-    *) die "Unknown mode '$MODE' (assess|salvage|netfix|reinstall|rebuild)";;
+    *) die "Unknown mode '$MODE' (assess|salvage|netfix|reinstall|rebuild|shell)";;
   esac
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -457,6 +460,29 @@ do_netfix() {
   info "Network/apt configuration repaired. Test with: chroot $mp apt-get update"
 }
 
+# ─── shell: interactive chroot, auto-cleanup on exit ──────────────────────────
+do_shell() {
+  local mp="$1"
+  info "Remounting $mp read-write for interactive chroot"
+  mount -o remount,rw "$mp" || warn "Could not remount rw — shell will be read-only."
+  bind_chroot_fs "$mp"
+  ensure_resolv "$mp"
+
+  # Find a usable shell inside the target (rm -rf may have removed bash).
+  local sh="" cand
+  for cand in /bin/bash /usr/bin/bash /bin/sh /usr/bin/sh; do
+    [[ -x "$mp$cand" ]] && { sh="$cand"; break; }
+  done
+  [[ -n "$sh" ]] || die "No shell in target (/bin/bash, /bin/sh missing) — too damaged for a chroot shell. Run 'rebuild' first."
+
+  info "Entering chroot: $mp   (shell: $sh)"
+  info "Type 'exit' or press Ctrl-D to leave — all mounts unmount automatically."
+  # PS1 marks the chroot; '|| true' so a non-zero exit from the shell doesn't
+  # trip 'set -e' before cleanup runs.
+  PS1='(chroot) \u@\h:\w\$ ' chroot "$mp" "$sh" || true
+  info "Left chroot; unmounting."
+}
+
 # ─── reinstall: restore deleted files by reinstalling every package ───────────
 do_reinstall() {
   local mp="$1"
@@ -547,7 +573,7 @@ main() {
 
   # Fail safe: writing modes are never allowed against a mounted/in-use disk.
   case "$MODE" in
-    netfix|reinstall|rebuild) assert_target_offline "$root" ;;
+    netfix|reinstall|rebuild|shell) assert_target_offline "$root" ;;
   esac
 
   MP=$(try_mount_ro "$root") || die "Could not mount $root (fs may be damaged — try fsck or image it)."
@@ -559,6 +585,7 @@ main() {
     netfix)    assess_root "$MP"; do_netfix "$MP" ;;
     reinstall) assess_root "$MP"; do_reinstall "$MP" ;;
     rebuild)   assess_root "$MP"; do_rebuild "$MP" ;;
+    shell)     do_shell "$MP" ;;
   esac
 }
 
