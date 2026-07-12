@@ -246,7 +246,14 @@ main() {
   firmware=$(detect_firmware)
   info "Firmware mode detected: $firmware"
 
-  # Root partition — allow env override, scoped to the internal disk
+  # Target disk — detect first so partition scans are scoped to it
+  local disk="${DISK:-}"
+  if [[ -z "$disk" ]]; then
+    disk=$(find_internal_disk)
+    [[ -n "$disk" ]] || die \
+      "Could not detect internal disk. Override with:  sudo DISK=/dev/sdX $0"
+  fi
+  info "Target disk: $disk"
   local root_dev="${ROOT_DEV:-}"
   if [[ -z "$root_dev" ]]; then
     root_dev=$(find_root_partition "$disk")
@@ -265,23 +272,6 @@ main() {
     else
       info "EFI partition: $efi_dev"
     fi
-  fi
-
-  # Parent disk — prefer explicit override, then largest non-live disk
-  local disk="${DISK:-}"
-  if [[ -z "$disk" ]]; then
-    disk=$(find_internal_disk)
-    [[ -n "$disk" ]] || die \
-      "Could not detect internal disk. Override with:  sudo DISK=/dev/sdX $0"
-  fi
-  info "Target disk: $disk"
-
-  # Validate root partition is actually on the chosen disk
-  local root_disk
-  root_disk=$(disk_of "$root_dev")
-  if [[ "$root_disk" != "$disk" ]]; then
-    warn "Root partition $root_dev is on $root_disk but target disk is $disk"
-    warn "They differ — check your setup or use DISK=/dev/sdX to override"
   fi
 
   # Summary + confirmation
