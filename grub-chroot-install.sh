@@ -12,6 +12,7 @@
 #   MOUNT_POINT=/mnt/foo – use a custom mount point (default: /mnt/recovery)
 
 set -euo pipefail
+set -x  # print each command as it runs — remove after debugging
 
 MOUNT_POINT="${MOUNT_POINT:-/mnt/recovery}"
 
@@ -32,9 +33,11 @@ settle_udev() {
     info "Waiting for udev to settle..."
     udevadm settle --timeout=10 2>/dev/null || true
   fi
-  # Re-read partition tables in case the kernel missed them
+  # Re-read partition tables — guard with -b to avoid "not a block device"
+  local disk
   for disk in /dev/sd? /dev/nvme?n?; do
-    [[ -b "$disk" ]] && blockdev --rereadpt "$disk" 2>/dev/null || true
+    [[ -b "$disk" ]] || continue
+    blockdev --rereadpt "$disk" 2>/dev/null || true
   done
 }
 
@@ -151,7 +154,7 @@ do_mounts() {
   fi
 
   # Virtual filesystems required by grub-install
-  for fs in dev dev/pts proc sys; do
+  for fs in dev dev/pts proc sys run; do
     info "Bind-mounting /$fs"
     mkdir -p "$MOUNT_POINT/$fs"
     mount --bind "/$fs" "$MOUNT_POINT/$fs"
