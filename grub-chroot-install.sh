@@ -26,6 +26,18 @@ require_root() {
   [[ $EUID -eq 0 ]] || die "Run as root: sudo $0"
 }
 
+settle_udev() {
+  # Make sure all block device nodes are present before we probe them
+  if command -v udevadm &>/dev/null; then
+    info "Waiting for udev to settle..."
+    udevadm settle --timeout=10 2>/dev/null || true
+  fi
+  # Re-read partition tables in case the kernel missed them
+  for disk in /dev/sd? /dev/nvme?n?; do
+    [[ -b "$disk" ]] && blockdev --rereadpt "$disk" 2>/dev/null || true
+  done
+}
+
 cleanup() {
   info "Cleaning up mounts under $MOUNT_POINT ..."
   umount -R "$MOUNT_POINT" 2>/dev/null || true
@@ -48,10 +60,17 @@ find_root_partition() {
   info "Scanning for Linux root partition..."
 
   local candidates
-  candidates=$(lsblk -lnpo NAME,FSTYPE | awk '$2 ~ /^(ext[234]|xfs|btrfs)$/ {print $1}')
+  # Use printf to strip any stray whitespace/carriage-returns from lsblk output
+  candidates=$(lsblk -lnpo NAME,FSTYPE | awk '$2 ~ /^(ext[234]|xfs|btrfs)$/ {printf "%s\n", $1}')
 
   local found=""
   for dev in $candidates; do
+    # Guard: must be an actual block device node — lsblk can list things udev
+    # hasn't materialised yet, which causes "not a block device" errors.
+    if [[ ! -b "$dev" ]]; then
+      warn "Skipping $dev — block device node missing (udev not settled?)"
+      continue
+    fi
     local tmp
     tmp=$(mktemp -d)
     if mount -o ro "$dev" "$tmp" 2>/dev/null; then
@@ -77,13 +96,17 @@ find_efi_partition() {
   # Primary: match by GPT partition type GUID
   local esp
   esp=$(lsblk -lnpo NAME,PARTTYPE | \
-    awk 'tolower($2) == "c12a7328-f81f-11d2-ba4b-00a0c93ec93b" {print $1}' | head -1)
+    awk 'tolower($2) == "c12a7328-f81f-11d2-ba4b-00a0c93ec93b" {printf "%s\n", $1}' | head -1)
 
   # Fallback: vfat partition containing an /EFI directory
   if [[ -z "$esp" ]]; then
     local vfat_devs
-    vfat_devs=$(lsblk -lnpo NAME,FSTYPE | awk '$2=="vfat"{print $1}')
+    vfat_devs=$(lsblk -lnpo NAME,FSTYPE | awk '$2=="vfat"{printf "%s\n", $1}')
     for dev in $vfat_devs; do
+      if [[ ! -b "$dev" ]]; then
+        warn "Skipping $dev — block device node missing"
+        continue
+      fi
       local tmp
       tmp=$(mktemp -d)
       if mount -o ro "$dev" "$tmp" 2>/dev/null; then
@@ -176,6 +199,8 @@ run_grub() {
 main() {
   require_root
   trap cleanup EXIT
+
+  settle_udev
 
   local firmware
   firmware=$(detect_firmware)
