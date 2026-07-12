@@ -13,6 +13,8 @@
 #   sudo ./ubuntu-boot-repair.sh                 # auto-detect everything
 #   sudo ./ubuntu-boot-repair.sh --yes           # skip the confirmation prompt
 #   sudo ./ubuntu-boot-repair.sh --no-fsck       # don't run fsck
+#   sudo ./ubuntu-boot-repair.sh --removable     # also install to \EFI\BOOT fallback
+#                                                # (fixes firmware "boot device not found")
 #   sudo ROOT_DEV=/dev/nvme0n1p5 ./ubuntu-boot-repair.sh
 #
 # Overrides (env vars):
@@ -28,6 +30,7 @@ set -euo pipefail
 MOUNT_POINT="${MOUNT_POINT:-/mnt/boot-repair}"
 ASSUME_YES=0
 DO_FSCK=1
+REMOVABLE=0
 
 # ─── logging (ALWAYS to stderr so $(func) capture stays clean) ────────────────
 
@@ -43,6 +46,7 @@ parse_args() {
     case "$1" in
       -y|--yes)      ASSUME_YES=1 ;;
       --no-fsck)     DO_FSCK=0 ;;
+      --removable)   REMOVABLE=1 ;;
       -h|--help)     grep -E '^#( |$)' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
       *)             die "Unknown argument: $1 (try --help)" ;;
     esac
@@ -237,6 +241,13 @@ run_repairs() {
     chroot "$MOUNT_POINT" grub-install \
       --target=x86_64-efi --efi-directory=/boot/efi \
       --bootloader-id=ubuntu --recheck
+    if [[ "$REMOVABLE" == 1 ]]; then
+      info "Also installing GRUB to the removable/fallback path (\\EFI\\BOOT\\BOOTX64.EFI)"
+      # Firmware that ignores or drops NVRAM entries still boots this path.
+      chroot "$MOUNT_POINT" grub-install \
+        --target=x86_64-efi --efi-directory=/boot/efi \
+        --removable --recheck
+    fi
   else
     [[ -n "$disk" ]] || die "BIOS mode needs a target disk (set DISK=/dev/XXX)."
     chroot "$MOUNT_POINT" grub-install --target=i386-pc --recheck "$disk"
@@ -250,6 +261,12 @@ run_repairs() {
     warn "update-initramfs returned non-zero; check output above."
 
   info "All repairs completed."
+
+  # Show the firmware boot entries so you can confirm/adjust boot order.
+  if [[ "$firmware" == "uefi" ]] && command -v efibootmgr &>/dev/null; then
+    info "Current UEFI boot entries (efibootmgr -v):"
+    efibootmgr -v >&2 || warn "efibootmgr could not read NVRAM (efivars not mounted?)."
+  fi
 }
 
 # ─── main ──────────────────────────────────────────────────────────────────────
