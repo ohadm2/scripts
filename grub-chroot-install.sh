@@ -9,10 +9,10 @@
 # Overrides (optional env vars):
 #   ROOT_DEV=/dev/sdXY   – skip auto-detection for root partition
 #   EFI_DEV=/dev/sdXZ    – skip auto-detection for EFI partition
+#   DISK=/dev/sdX        – skip auto-detection for target disk (grub install target)
 #   MOUNT_POINT=/mnt/foo – use a custom mount point (default: /mnt/recovery)
 
 set -euo pipefail
-set -x  # print each command as it runs — remove after debugging
 
 MOUNT_POINT="${MOUNT_POINT:-/mnt/recovery}"
 
@@ -57,19 +57,19 @@ detect_firmware() {
 }
 
 # ─── find the linux root partition ───────────────────────────────────────────
-# Mounts each ext4/xfs/btrfs candidate (read-only) and checks for /etc/os-release.
+# Scoped to partitions on a specific disk. Mounts each ext4/xfs/btrfs candidate
+# (read-only) and checks for /etc/os-release.
 
 find_root_partition() {
-  info "Scanning for Linux root partition..."
+  local disk="$1"
+  info "Scanning for Linux root partition on $disk..."
 
   local candidates
-  # Use printf to strip any stray whitespace/carriage-returns from lsblk output
-  candidates=$(lsblk -lnpo NAME,FSTYPE | awk '$2 ~ /^(ext[234]|xfs|btrfs)$/ {printf "%s\n", $1}')
+  candidates=$(lsblk -lnpo NAME,FSTYPE "$disk" | awk '$2 ~ /^(ext[234]|xfs|btrfs)$/ {printf "%s\n", $1}')
 
   local found=""
   for dev in $candidates; do
-    # Guard: must be an actual block device node — lsblk can list things udev
-    # hasn't materialised yet, which causes "not a block device" errors.
+    dev=$(echo "$dev" | tr -d '[:space:]')
     if [[ ! -b "$dev" ]]; then
       warn "Skipping $dev — block device node missing (udev not settled?)"
       continue
@@ -92,20 +92,23 @@ find_root_partition() {
 }
 
 # ─── find the EFI system partition ───────────────────────────────────────────
+# Scoped to partitions on a specific disk.
 
 find_efi_partition() {
-  info "Scanning for EFI System Partition..."
+  local disk="$1"
+  info "Scanning for EFI System Partition on $disk..."
 
-  # Primary: match by GPT partition type GUID
+  # Primary: match by GPT partition type GUID on the target disk only
   local esp
-  esp=$(lsblk -lnpo NAME,PARTTYPE | \
-    awk 'tolower($2) == "c12a7328-f81f-11d2-ba4b-00a0c93ec93b" {printf "%s\n", $1}' | head -1)
+  esp=$(lsblk -lnpo NAME,PARTTYPE "$disk" | \
+    awk 'tolower($2) == "c12a7328-f81f-11d2-ba4b-00a0c93ec93b" {printf "%s\n", $1}' | head -1 | tr -d '[:space:]')
 
-  # Fallback: vfat partition containing an /EFI directory
+  # Fallback: vfat partition on the target disk containing an /EFI directory
   if [[ -z "$esp" ]]; then
     local vfat_devs
-    vfat_devs=$(lsblk -lnpo NAME,FSTYPE | awk '$2=="vfat"{printf "%s\n", $1}')
+    vfat_devs=$(lsblk -lnpo NAME,FSTYPE "$disk" | awk '$2=="vfat"{printf "%s\n", $1}')
     for dev in $vfat_devs; do
+      dev=$(echo "$dev" | tr -d '[:space:]')
       if [[ ! -b "$dev" ]]; then
         warn "Skipping $dev — block device node missing"
         continue
@@ -131,7 +134,41 @@ find_efi_partition() {
 # ─── derive the parent disk from a partition ─────────────────────────────────
 
 disk_of() {
-  lsblk -npo PKNAME "$1" | head -1
+  # tr strips the trailing newline lsblk embeds in PKNAME output
+  lsblk -npo PKNAME "$1" | tr -d '[:space:]'
+}
+
+# ─── find the largest (internal) disk, excluding the live USB ────────────────
+# The live USB is almost always the smallest removable disk.
+# Strategy: find which disk backs the current live / mount, then pick the
+# largest *other* disk as the install target.
+
+find_internal_disk() {
+  # Disk that the running live session is on (backs /, /run/live, or /cdrom)
+  local live_disk=""
+  local live_part
+  # findmnt gives us the source device for the overlay/live root
+  live_part=$(findmnt -nro SOURCE / 2>/dev/null | head -1 | tr -d '[:space:]')
+  if [[ -n "$live_part" && -b "$live_part" ]]; then
+    live_disk=$(lsblk -npo PKNAME "$live_part" 2>/dev/null | tr -d '[:space:]')
+  fi
+
+  # Pick the largest disk that is NOT the live disk
+  # lsblk -d: disks only (no partitions), SIZE in bytes with -b
+  local best_disk="" best_size=0
+  while IFS= read -r line; do
+    local dev size
+    dev=$(echo "$line"  | awk '{print $1}' | tr -d '[:space:]')
+    size=$(echo "$line" | awk '{print $2}' | tr -d '[:space:]')
+    [[ -b "$dev" ]]           || continue
+    [[ "$dev" != "$live_disk" ]] || continue
+    if (( size > best_size )); then
+      best_size=$size
+      best_disk=$dev
+    fi
+  done < <(lsblk -bdnpo NAME,SIZE 2>/dev/null)
+
+  echo "$best_disk"
 }
 
 # ─── mount everything needed for the chroot ──────────────────────────────────
@@ -209,31 +246,43 @@ main() {
   firmware=$(detect_firmware)
   info "Firmware mode detected: $firmware"
 
-  # Root partition — allow env override
+  # Root partition — allow env override, scoped to the internal disk
   local root_dev="${ROOT_DEV:-}"
   if [[ -z "$root_dev" ]]; then
-    root_dev=$(find_root_partition)
+    root_dev=$(find_root_partition "$disk")
     [[ -n "$root_dev" ]] || die \
-      "Could not auto-detect root partition.\n" \
+      "Could not auto-detect root partition on $disk.\n" \
       "Override with:  sudo ROOT_DEV=/dev/sdXY $0"
   fi
   info "Root partition: $root_dev"
 
-  # EFI partition — allow env override
+  # EFI partition — allow env override, scoped to the internal disk
   local efi_dev="${EFI_DEV:-}"
   if [[ "$firmware" == "uefi" && -z "$efi_dev" ]]; then
-    efi_dev=$(find_efi_partition)
+    efi_dev=$(find_efi_partition "$disk")
     if [[ -z "$efi_dev" ]]; then
-      warn "Could not auto-detect EFI partition. Continuing — may fail on UEFI."
+      warn "Could not auto-detect EFI partition on $disk. Continuing — may fail on UEFI."
     else
       info "EFI partition: $efi_dev"
     fi
   fi
 
-  # Parent disk
-  local disk
-  disk=$(disk_of "$root_dev")
-  info "Parent disk: $disk"
+  # Parent disk — prefer explicit override, then largest non-live disk
+  local disk="${DISK:-}"
+  if [[ -z "$disk" ]]; then
+    disk=$(find_internal_disk)
+    [[ -n "$disk" ]] || die \
+      "Could not detect internal disk. Override with:  sudo DISK=/dev/sdX $0"
+  fi
+  info "Target disk: $disk"
+
+  # Validate root partition is actually on the chosen disk
+  local root_disk
+  root_disk=$(disk_of "$root_dev")
+  if [[ "$root_disk" != "$disk" ]]; then
+    warn "Root partition $root_dev is on $root_disk but target disk is $disk"
+    warn "They differ — check your setup or use DISK=/dev/sdX to override"
+  fi
 
   # Summary + confirmation
   echo ""
