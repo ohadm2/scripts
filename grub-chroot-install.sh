@@ -146,21 +146,23 @@ disk_of() {
 find_internal_disk() {
   # Disk that the running live session is on (backs /, /run/live, or /cdrom)
   local live_disk=""
-  local live_part
-  # findmnt gives us the source device for the overlay/live root
-  live_part=$(findmnt -nro SOURCE / 2>/dev/null | head -1 | tr -d '[:space:]')
+  local live_part=""
+  live_part=$(findmnt -nro SOURCE / 2>/dev/null | head -1 | tr -d '[:space:]') || true
   if [[ -n "$live_part" && -b "$live_part" ]]; then
-    live_disk=$(lsblk -npo PKNAME "$live_part" 2>/dev/null | tr -d '[:space:]')
+    live_disk=$(lsblk -npo PKNAME "$live_part" 2>/dev/null | tr -d '[:space:]') || true
   fi
 
   # Pick the largest disk that is NOT the live disk
   # lsblk -d: disks only (no partitions), SIZE in bytes with -b
-  local best_disk="" best_size=0
+  local best_disk=""
+  local best_size=0
+  local dev=""
+  local size=""
   while IFS= read -r line; do
-    local dev size
     dev=$(echo "$line"  | awk '{print $1}' | tr -d '[:space:]')
     size=$(echo "$line" | awk '{print $2}' | tr -d '[:space:]')
-    [[ -b "$dev" ]]           || continue
+    [[ -b "$dev" ]]              || continue
+    [[ -n "$size" ]]             || continue
     [[ "$dev" != "$live_disk" ]] || continue
     if (( size > best_size )); then
       best_size=$size
