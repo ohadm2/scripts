@@ -18,8 +18,8 @@ MOUNT_POINT="${MOUNT_POINT:-/mnt/recovery}"
 
 # ─── helpers ────────────────────────────────────────────────────────────────
 
-info()  { echo -e "\e[32m[INFO]\e[0m  $*"; }
-warn()  { echo -e "\e[33m[WARN]\e[0m  $*"; }
+info()  { echo -e "\e[32m[INFO]\e[0m  $*" >&2; }
+warn()  { echo -e "\e[33m[WARN]\e[0m  $*" >&2; }
 error() { echo -e "\e[31m[ERROR]\e[0m $*" >&2; }
 die()   { error "$*"; exit 1; }
 
