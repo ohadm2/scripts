@@ -15,6 +15,10 @@
 #                       (needs the package system to have survived).
 #   rebuild             debootstrap a fresh base system from the archive (for the
 #                       "package system gone" case). Preserves /home.
+#   minimal             Install a minimal Ubuntu base (enough for apt + recovery
+#                       modes) if apt is functional but the system is gutted.
+#   recovery            Interactive recovery menu (like Ubuntu's boot recovery mode):
+#                       resume, clean, dpkg, fsck, network, root, grub, system-summary.
 #   shell               Mount + bind + chroot into the target for an interactive
 #                       repair shell; auto-unmounts everything on exit.
 #   fstab               Regenerate /etc/fstab (root + ESP + swap) by UUID.
@@ -25,6 +29,8 @@
 #   sudo ./ubuntu-rm-recover.sh netfix              [--root /dev/XXX]
 #   sudo ./ubuntu-rm-recover.sh reinstall           [--root /dev/XXX] [--yes]
 #   sudo ./ubuntu-rm-recover.sh rebuild             [--root /dev/XXX] [--yes]
+#   sudo ./ubuntu-rm-recover.sh minimal             [--root /dev/XXX] [--yes]
+#   sudo ./ubuntu-rm-recover.sh recovery            [--root /dev/XXX]
 #   sudo ./ubuntu-rm-recover.sh shell               [--root /dev/XXX]
 #   sudo ./ubuntu-rm-recover.sh fstab               [--root /dev/XXX]
 #
@@ -59,9 +65,9 @@ parse_args() {
   [[ $# -gt 0 ]] || { usage; exit 1; }
   MODE="$1"; shift
   case "$MODE" in
-    assess|salvage|netfix|reinstall|rebuild|shell|fstab) ;;
+    assess|salvage|netfix|reinstall|rebuild|minimal|recovery|shell|fstab) ;;
     -h|--help) usage; exit 0 ;;
-    *) die "Unknown mode '$MODE' (assess|salvage|netfix|reinstall|rebuild|shell|fstab)";;
+    *) die "Unknown mode '$MODE' (assess|salvage|netfix|reinstall|rebuild|minimal|recovery|shell|fstab)";;
   esac
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -711,7 +717,275 @@ do_rebuild() {
   info "Rebuild pass complete."
 }
 
-# ─── main ─────────────────────────────────────────────────────────────────────
+# ─── minimal: install the smallest Ubuntu base that enables recovery ──────────
+# Requires apt to be functional (dpkg + apt-get + dpkg database present).
+# Installs just enough to boot, run apt, and allow reinstall/rebuild to work.
+do_minimal() {
+  local mp="$1"
+  (( HAVE_PKGSYS )) || die "apt/dpkg not functional — use 'rebuild' (debootstrap) instead."
+  warn "'minimal' installs the smallest viable base so the system can boot and"
+  warn "run apt for further recovery. This WRITES to the disk."
+  confirm "Type 'MINIMAL' to continue:" "MINIMAL" || die "Aborted."
+
+  local info_pair cn arch
+  info_pair=$(prepare_chroot "$mp")
+  cn="${info_pair%%|*}"; arch="${info_pair##*|}"
+
+  info "apt-get update (in chroot)"
+  chroot "$mp" apt-get update || die "apt-get update failed — check connectivity/sources."
+
+  # The minimal package set: just enough to boot + apt + networking + recovery
+  # ubuntu-minimal is the official minimal metapackage (coreutils, apt, dpkg,
+  # systemd, login, networking basics). We add kernel + bootloader + NM.
+  local minimal_pkgs=(
+    ubuntu-minimal          # official meta: coreutils, apt, systemd, login, etc.
+    linux-generic           # kernel + modules
+    initramfs-tools         # generate initrd
+    sudo                    # user privilege escalation
+    network-manager         # networking (WiFi + wired)
+    netplan.io              # network config renderer
+  )
+
+  # Bootloader: pick UEFI or BIOS grub
+  if [[ -d /sys/firmware/efi ]]; then
+    minimal_pkgs+=(grub-efi-amd64 shim-signed)
+  else
+    minimal_pkgs+=(grub-pc)
+  fi
+
+  info "Installing minimal recovery base: ${minimal_pkgs[*]}"
+  chroot "$mp" apt-get install -y --no-install-recommends \
+    -o Dpkg::Options::="--force-confmiss" \
+    -o Dpkg::Options::="--force-confdef" \
+    "${minimal_pkgs[@]}" || warn "Some packages failed — review output above."
+
+  # Networking
+  repair_network_profiles "$mp"
+  enable_network_services "$mp"
+
+  # Bootloader installation
+  if [[ -d /sys/firmware/efi ]]; then
+    chroot "$mp" grub-install --target=x86_64-efi --efi-directory=/boot/efi \
+      --bootloader-id=ubuntu --recheck 2>/dev/null || warn "grub-install (EFI) failed."
+  else
+    # Try to find the parent disk for BIOS grub
+    local disk
+    disk="/dev/$(lsblk -no PKNAME "$ROOT_DEV" 2>/dev/null | head -1 | tr -d '[:space:]')"
+    [[ -b "$disk" ]] && chroot "$mp" grub-install "$disk" 2>/dev/null || warn "grub-install (BIOS) failed."
+  fi
+  chroot "$mp" update-grub 2>/dev/null || warn "update-grub failed."
+  chroot "$mp" update-initramfs -u -k all 2>/dev/null || warn "update-initramfs failed."
+
+  info "Minimal install complete. The system should boot to a console."
+  info "Next steps:"
+  info "  • Set root password:  chroot $mp passwd root"
+  info "  • Full desktop:       chroot $mp apt-get install ubuntu-desktop"
+  info "  • Or run 'reinstall' mode to restore all previously-installed packages."
+}
+
+# ─── recovery: interactive recovery menu (Ubuntu-style) ───────────────────────
+# Mimics the recovery mode menu that Ubuntu shows at boot (from the GRUB
+# 'recovery mode' entry), but works from a live session against a damaged disk.
+do_recovery() {
+  local mp="$1"
+
+  # We need at least RW + bind mounts for most operations
+  info "Preparing target for recovery menu…"
+  mount -o remount,rw "$mp" 2>/dev/null || warn "Could not remount rw — some options will fail."
+  bind_chroot_fs "$mp"
+  mount_target_boot "$mp"
+  ensure_resolv "$mp"
+
+  while true; do
+    echo "" >&2
+    echo "  ┌─────────────────────────────────────────────────────────┐" >&2
+    echo "  │           Recovery Menu  (ubuntu-rm-recover)            │" >&2
+    echo "  ├─────────────────────────────────────────────────────────┤" >&2
+    echo "  │  resume     - Attempt normal boot (exit recovery)       │" >&2
+    echo "  │  clean      - Free up disk space (apt autoremove/clean) │" >&2
+    echo "  │  dpkg       - Repair broken packages (dpkg --configure) │" >&2
+    echo "  │  fsck       - Check all filesystems                     │" >&2
+    echo "  │  network    - Repair networking + enable connectivity   │" >&2
+    echo "  │  root       - Drop to a root shell in chroot            │" >&2
+    echo "  │  grub       - Reinstall/update GRUB bootloader          │" >&2
+    echo "  │  summary    - System summary (assess damage)            │" >&2
+    echo "  │  fstab      - Regenerate /etc/fstab                     │" >&2
+    echo "  │  passwd     - Reset a user's password                   │" >&2
+    echo "  │  failsafe-x - Fix graphics (reconfigure Xorg/display)  │" >&2
+    echo "  │  quit       - Exit recovery menu                        │" >&2
+    echo "  └─────────────────────────────────────────────────────────┘" >&2
+    echo "" >&2
+    local choice
+    read -rp "  recovery> " choice
+
+    case "$choice" in
+      resume)
+        info "Syncing and exiting. Reboot when ready."
+        sync
+        break
+        ;;
+
+      clean)
+        info "Cleaning up disk space…"
+        chroot "$mp" apt-get autoremove -y 2>/dev/null || warn "autoremove failed."
+        chroot "$mp" apt-get autoclean 2>/dev/null || true
+        chroot "$mp" apt-get clean 2>/dev/null || true
+        # Clean old kernels (keep running + latest)
+        if chroot "$mp" dpkg -l 'linux-image-*' &>/dev/null 2>&1; then
+          local cur_kern
+          cur_kern=$(chroot "$mp" uname -r 2>/dev/null || true)
+          if [[ -n "$cur_kern" ]]; then
+            info "Current kernel: $cur_kern (kept)"
+          fi
+        fi
+        # Clean journal
+        chroot "$mp" journalctl --vacuum-size=50M 2>/dev/null || true
+        # Report disk usage
+        df -h "$mp" 2>/dev/null | tail -1 | awk '{print "  Disk usage: "$3" used / "$4" available (" $5 " full)"}' >&2
+        ok "Cleanup done."
+        ;;
+
+      dpkg)
+        info "Repairing broken packages…"
+        chroot "$mp" dpkg --configure -a 2>&1 | tail -20 || warn "dpkg --configure -a had errors."
+        chroot "$mp" apt-get install -f -y 2>&1 | tail -20 || warn "apt-get install -f failed."
+        ok "Package repair pass complete."
+        ;;
+
+      fsck)
+        warn "fsck requires unmounted filesystems. Checking non-root partitions…"
+        # We can't fsck the root while mounted; inform the user.
+        local root_dev_now
+        root_dev_now=$(findmnt -nro SOURCE "$mp" 2>/dev/null | head -1)
+        warn "Root ($root_dev_now) is MOUNTED — cannot fsck live. Will check others."
+        # Check any other fstab entries
+        if [[ -f "$mp/etc/fstab" ]]; then
+          local fdev fmp
+          while read -r fdev fmp; do
+            [[ "$fmp" == "/" ]] && continue
+            local resolved
+            resolved=$(resolve_spec "$fdev")
+            if [[ -n "$resolved" && -b "$resolved" ]]; then
+              if ! mountpoint -q "$mp$fmp" 2>/dev/null; then
+                info "Checking $resolved ($fmp)…"
+                fsck -y "$resolved" 2>&1 | tail -5 || true
+              else
+                warn "$fmp is mounted — skipping fsck."
+              fi
+            fi
+          done < <(awk '$1!~/^#/ && $2!="none" && $3!="swap"{print $1, $2}' "$mp/etc/fstab" 2>/dev/null)
+        fi
+        warn "To fsck root: unmount it, or run 'fsck $root_dev_now' from the live session (outside this script)."
+        ;;
+
+      network)
+        info "Repairing network configuration…"
+        local cn arch
+        cn=$(detect_release "$mp"); arch=$(detect_arch "$mp")
+        ensure_keyrings "$mp"
+        repair_sources "$mp" "$cn" "$arch"
+        ensure_resolv "$mp"
+        repair_network_profiles "$mp"
+        enable_network_services "$mp"
+        check_connectivity "$mp"
+        ok "Network repair done."
+        ;;
+
+      root)
+        info "Dropping to root shell in chroot. Type 'exit' to return to menu."
+        local sh=""
+        for cand in /bin/bash /usr/bin/bash /bin/sh /usr/bin/sh; do
+          [[ -x "$mp$cand" ]] && { sh="$cand"; break; }
+        done
+        if [[ -n "$sh" ]]; then
+          PS1='(recovery-chroot) \u@\h:\w# ' chroot "$mp" "$sh" || true
+        else
+          warn "No shell available in target. Run 'minimal' or 'rebuild' first."
+        fi
+        ;;
+
+      grub)
+        info "Reinstalling GRUB…"
+        if [[ -d /sys/firmware/efi ]]; then
+          chroot "$mp" grub-install --target=x86_64-efi --efi-directory=/boot/efi \
+            --bootloader-id=ubuntu --recheck 2>&1 | tail -5 || warn "grub-install (EFI) failed."
+        else
+          local disk
+          disk="/dev/$(lsblk -no PKNAME "$ROOT_DEV" 2>/dev/null | head -1 | tr -d '[:space:]')"
+          if [[ -b "$disk" ]]; then
+            chroot "$mp" grub-install "$disk" 2>&1 | tail -5 || warn "grub-install (BIOS) failed."
+          else
+            warn "Could not determine parent disk for BIOS grub. Use: grub-install /dev/sdX"
+          fi
+        fi
+        chroot "$mp" update-grub 2>&1 | tail -10 || warn "update-grub failed."
+        chroot "$mp" update-initramfs -u -k all 2>&1 | tail -5 || warn "update-initramfs failed."
+        ok "GRUB update done."
+        ;;
+
+      summary)
+        assess_root "$mp"
+        ;;
+
+      fstab)
+        local root_dev_now
+        root_dev_now=$(findmnt -nro SOURCE "$mp" 2>/dev/null | head -1)
+        if [[ -n "$root_dev_now" ]]; then
+          generate_fstab "$mp" "$root_dev_now"
+        else
+          warn "Cannot determine root device for fstab generation."
+        fi
+        ;;
+
+      passwd)
+        local target_user
+        # List available users
+        if [[ -f "$mp/etc/passwd" ]]; then
+          info "Users with login shells:"
+          awk -F: '$7 ~ /(bash|sh|zsh|fish)$/ && $3 >= 1000 && $3 < 65534 {print "  " $1 " (uid=" $3 ")"}' \
+            "$mp/etc/passwd" >&2
+          echo "  root (uid=0)" >&2
+        fi
+        read -rp "  Username to reset: " target_user
+        if [[ -n "$target_user" ]]; then
+          chroot "$mp" passwd "$target_user" || warn "passwd failed."
+        fi
+        ;;
+
+      failsafe-x|failsafe)
+        info "Attempting to fix display/graphics…"
+        # Remove Xorg configs that might force a broken driver
+        if [[ -f "$mp/etc/X11/xorg.conf" ]]; then
+          mv "$mp/etc/X11/xorg.conf" "$mp/etc/X11/xorg.conf.recovery-bak" && \
+            info "Moved xorg.conf aside (was possibly forcing a broken driver)."
+        fi
+        # Reconfigure display manager
+        chroot "$mp" dpkg-reconfigure -f noninteractive gdm3 2>/dev/null || \
+          chroot "$mp" dpkg-reconfigure -f noninteractive lightdm 2>/dev/null || \
+          warn "No display manager found to reconfigure."
+        # Try reinstalling the GPU driver stack
+        info "Reinstalling mesa (safe generic GPU driver)…"
+        chroot "$mp" apt-get install --reinstall -y libgl1-mesa-dri 2>/dev/null || true
+        ok "Graphics fixup done. Try rebooting."
+        ;;
+
+      quit|exit|q)
+        info "Exiting recovery menu."
+        break
+        ;;
+
+      "")
+        continue
+        ;;
+
+      *)
+        warn "Unknown option: '$choice'"
+        ;;
+    esac
+  done
+}
+
+# ─── main ─────────────────────────────────────────────────────────────────────────
 main() {
   parse_args "$@"
   require_root
@@ -723,7 +997,7 @@ main() {
 
   # Fail safe: writing modes are never allowed against a mounted/in-use disk.
   case "$MODE" in
-    netfix|reinstall|rebuild|shell|fstab) assert_target_offline "$root" ;;
+    netfix|reinstall|rebuild|minimal|recovery|shell|fstab) assert_target_offline "$root" ;;
   esac
 
   MP=$(try_mount_ro "$root") || die "Could not mount $root (fs may be damaged — try fsck or image it)."
@@ -735,6 +1009,8 @@ main() {
     netfix)    assess_root "$MP"; do_netfix "$MP" ;;
     reinstall) assess_root "$MP"; do_reinstall "$MP" ;;
     rebuild)   assess_root "$MP"; do_rebuild "$MP" ;;
+    minimal)   assess_root "$MP"; do_minimal "$MP" ;;
+    recovery)  do_recovery "$MP" ;;
     shell)     do_shell "$MP" ;;
     fstab)     do_fstab "$MP" "$root" ;;
   esac
